@@ -30,7 +30,8 @@ public static class StringFormatEncoder {
         //States that Interpolated values can have (the [] thingies)
         StringifyWithArticle = 0x0,    //[] and we include an appropriate article for the resulting value, if necessary
         StringifyNoArticle = 0x1,      //[] and we never include an article (because it's elsewhere)
-        ReferenceOfValue = 0x2,        //\ref[]
+        NoStringify = 0x2,             //Appends no text at all
+        ReferenceOfValue = 0x3,        //\ref[]
 
         //States that macros can have
         //(these can have any arbitrary value as long as compiler/server/client all agree)
@@ -89,26 +90,10 @@ public static class StringFormatEncoder {
         return true;
     }
 
-    public static bool Decode(char c) {
-        ushort bytes = c;
-        return (bytes & FormatPrefix) == FormatPrefix; // Could also check that the lower byte is a valid enum but... ehhhhh
-    }
-
     /// <returns>true if argument is a marker for an interpolated value, one of them [] things. false if not.</returns>
     public static bool IsInterpolation(FormatSuffix suffix) {
         //This logic requires that all the interpolated-value enums keep separated from the others.
         //I'd write some type-engine code to catch a discrepancy in that but alas, this language is just not OOPy enough.
         return suffix <= FormatSuffix.ReferenceOfValue;
-    }
-
-    /// <returns>A new version of the string, with all formatting characters removed.</returns>
-    public static string RemoveFormatting(string input) {
-        StringBuilder ret = new StringBuilder(input.Length); // Trying to keep it to one malloc here
-        foreach(char c in input) {
-            if(!Decode(c))
-                ret.Append(c);
-        }
-
-        return ret.ToString();
     }
 }

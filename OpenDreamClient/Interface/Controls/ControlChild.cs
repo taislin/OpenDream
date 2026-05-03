@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 using OpenDreamClient.Interface.Controls.UI;
-using OpenDreamClient.Interface.Descriptors;
-using OpenDreamClient.Interface.DMF;
+using OpenDreamShared.Interface.Descriptors;
+using OpenDreamShared.Interface.DMF;
 using Robust.Client.ResourceManagement;
 using Robust.Client.UserInterface;
 
@@ -10,7 +10,7 @@ namespace OpenDreamClient.Interface.Controls;
 internal sealed class ControlChild(ControlDescriptor controlDescriptor, ControlWindow window) : InterfaceControl(controlDescriptor, window) {
     private ControlDescriptorChild ChildDescriptor => (ControlDescriptorChild)ElementDescriptor;
 
-    private Splitter _splitter;
+    private Splitter _splitter = default!;
 
     protected override Control CreateUIElement() {
         _splitter = new Splitter();

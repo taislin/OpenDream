@@ -1,6 +1,4 @@
-﻿using OpenDreamRuntime.Procs;
-
-namespace OpenDreamRuntime.Objects.Types;
+﻿namespace OpenDreamRuntime.Objects.Types;
 
 [Virtual]
 public class DreamObjectAtom : DreamObject {
@@ -15,20 +13,6 @@ public class DreamObjectAtom : DreamObject {
         Underlays = new(ObjectTree.List.ObjectDefinition, this, AppearanceSystem, true);
         VisContents = new(ObjectTree.List.ObjectDefinition, PvsOverrideSystem, this);
         Filters = new(ObjectTree.List.ObjectDefinition, this);
-
-        AtomManager.AddAtom(this);
-    }
-
-    protected override void HandleDeletion(bool possiblyThreaded) {
-        // SAFETY: RemoveAtom is not threadsafe.
-        if (possiblyThreaded) {
-            EnterIntoDelQueue();
-            return;
-        }
-
-        AtomManager.RemoveAtom(this);
-
-        base.HandleDeletion(possiblyThreaded);
     }
 
     public string GetRTEntityDesc() {
@@ -61,7 +45,7 @@ public class DreamObjectAtom : DreamObject {
                 value = new(Underlays);
                 return true;
             case "verbs":
-                value = new(new VerbsList(ObjectTree, AtomManager, VerbSystem, this));
+                value = new(new VerbsList(ObjectTree, AtomManager, this));
                 return true;
             case "filters":
                 value = new(Filters);
@@ -109,7 +93,7 @@ public class DreamObjectAtom : DreamObject {
 
                 if (value.TryGetValueAsDreamList(out var valueList)) {
                     // TODO: This should postpone UpdateAppearance until after everything is added
-                    foreach (DreamValue overlayValue in valueList.GetValues()) {
+                    foreach (DreamValue overlayValue in valueList.EnumerateValues()) {
                         Overlays.AddValue(overlayValue);
                     }
                 } else if (!value.IsNull) {
@@ -123,7 +107,7 @@ public class DreamObjectAtom : DreamObject {
 
                 if (value.TryGetValueAsDreamList(out var valueList)) {
                     // TODO: This should postpone UpdateAppearance until after everything is added
-                    foreach (DreamValue underlayValue in valueList.GetValues()) {
+                    foreach (DreamValue underlayValue in valueList.EnumerateValues()) {
                         Underlays.AddValue(underlayValue);
                     }
                 } else if (!value.IsNull) {
@@ -137,7 +121,7 @@ public class DreamObjectAtom : DreamObject {
 
                 if (value.TryGetValueAsDreamList(out var valueList)) {
                     // TODO: This should postpone UpdateAppearance until after everything is added
-                    foreach (DreamValue visContentsValue in valueList.GetValues()) {
+                    foreach (DreamValue visContentsValue in valueList.EnumerateValues()) {
                         VisContents.AddValue(visContentsValue);
                     }
                 } else if (!value.IsNull) {
@@ -149,12 +133,28 @@ public class DreamObjectAtom : DreamObject {
             case "filters": {
                 Filters.Cut();
 
-                if (value.TryGetValueAsDreamList(out var valueList)) { // filters = list("type"=...)
-                    var filterObject = DreamObjectFilter.TryCreateFilter(ObjectTree, valueList);
-                    if (filterObject == null) // list() with invalid "type" is ignored
-                        break;
+                // filters = list("type"=...) or list(filter(...), filter(...))
+                if (value.TryGetValueAsDreamList(out var valueList)) {
+                    if (valueList.GetValue(new("type")) != DreamValue.Null) { // It's a single filter
+                        var filterObject = DreamObjectFilter.TryCreateFilter(ObjectTree, valueList);
+                        if (filterObject == null) // list() with invalid "type" is ignored
+                            break;
 
-                    Filters.AddValue(new(filterObject));
+                        Filters.AddValue(new(filterObject));
+                    } else { // It's a list of filters
+                        foreach (var filter in valueList.EnumerateValues()) {
+                            if (!filter.TryGetValueAsDreamObject<DreamObjectFilter>(out var filterObject)) {
+                                if (!filter.TryGetValueAsDreamList(out var filterValues))
+                                    continue;
+
+                                filterObject = DreamObjectFilter.TryCreateFilter(ObjectTree, filterValues);
+                                if (filterObject == null)
+                                    continue;
+                            }
+
+                            Filters.AddValue(new(filterObject));
+                        }
+                    }
                 } else if (!value.IsNull) {
                     Filters.AddValue(value);
                 }

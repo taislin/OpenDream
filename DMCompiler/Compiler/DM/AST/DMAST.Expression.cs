@@ -47,8 +47,9 @@ public sealed class DMASTStringFormat(Location location, string value, DMASTExpr
     public readonly DMASTExpression?[] InterpolatedValues = interpolatedValues;
 }
 
-public sealed class DMASTList(Location location, DMASTCallParameter[] values) : DMASTExpression(location) {
+public sealed class DMASTList(Location location, DMASTCallParameter[] values, bool isAList) : DMASTExpression(location) {
     public readonly DMASTCallParameter[] Values = values;
+    public readonly bool IsAList = isAList; // list() or alist()
 
     public bool AllValuesConstant() {
         return Values.All(
@@ -113,6 +114,10 @@ public sealed class DMASTRgb(Location location, DMASTCallParameter[] parameters)
     public readonly DMASTCallParameter[] Parameters = parameters;
 }
 
+public sealed class DMASTAnimate(Location location, DMASTCallParameter[] parameters) : DMASTExpression(location) {
+    public readonly DMASTCallParameter[] Parameters = parameters;
+}
+
 public sealed class DMASTPick(Location location, DMASTPick.PickValue[] values) : DMASTExpression(location) {
     public struct PickValue(DMASTExpression? weight, DMASTExpression value) {
         public readonly DMASTExpression? Weight = weight;
@@ -142,6 +147,12 @@ public class DMASTVarDeclExpression(Location location, DMASTPath path) : DMASTEx
 public sealed class DMASTNewPath(Location location, DMASTConstantPath path, DMASTCallParameter[]? parameters)
     : DMASTExpression(location) {
     public readonly DMASTConstantPath Path = path;
+    public readonly DMASTCallParameter[]? Parameters = parameters;
+}
+
+public sealed class DMASTNewModifiedType(Location location, DMASTModifiedType type, DMASTCallParameter[]? parameters)
+    : DMASTExpression(location) {
+    public readonly DMASTModifiedType Type = type;
     public readonly DMASTCallParameter[]? Parameters = parameters;
 }
 

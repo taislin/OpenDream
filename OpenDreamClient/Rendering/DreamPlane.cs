@@ -54,7 +54,6 @@ internal sealed class DreamPlane(IRenderTexture mainRenderTarget) : IDisposable 
                 var positionOffset = -worldAABB.BottomLeft;
 
                 if (sprite.HasRenderSource && overlay.RenderSourceLookup.TryGetValue(sprite.RenderSource!, out var renderSourceTexture)) {
-                    positionOffset -= renderSourceTexture.Size / 2 / EyeManager.PixelsPerMeter;
                     sprite.TextureOverride = renderSourceTexture.Texture;
                 }
 
@@ -97,7 +96,13 @@ internal sealed class DreamPlane(IRenderTexture mainRenderTarget) : IDisposable 
             if (texture == null)
                 continue;
 
-            var pos = (sprite.Position - worldAABB.BottomLeft) * EyeManager.PixelsPerMeter;
+            // For mouse_opacity = 2, discard transparency but keep the size.
+            var textureSize = texture.Size;
+            if (sprite.MouseOpacity == MouseOpacity.Opaque) {
+                texture = Texture.White;
+            }
+
+            var pos = (sprite.Position - worldAABB.BottomLeft) * overlay.IconSize;
             if (sprite.MainIcon != null)
                 pos += sprite.MainIcon.TextureRenderOffset;
 
@@ -107,8 +112,8 @@ internal sealed class DreamPlane(IRenderTexture mainRenderTarget) : IDisposable 
             var colorB = (byte)((hash >> 16) & 0xFF);
             Color targetColor = new Color(colorR, colorG, colorB); //TODO - this could result in mis-clicks due to hash-collision since we ditch a whole byte.
             overlay.MouseMapLookup[targetColor] = sprite;
-            handle.SetTransform(DreamViewOverlay.CalculateDrawingMatrix(sprite.TransformToApply, pos, texture.Size, renderTargetSize));
-            handle.DrawTextureRect(texture, new Box2(Vector2.Zero, texture.Size), targetColor);
+            handle.SetTransform(DreamViewOverlay.CalculateDrawingMatrix(sprite.TransformToApply, pos, textureSize, renderTargetSize));
+            handle.DrawTextureRect(texture, new Box2(Vector2.Zero, textureSize), targetColor);
         }
     }
 }

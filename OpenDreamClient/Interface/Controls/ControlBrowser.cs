@@ -2,7 +2,7 @@
 using System.Net;
 using System.Text;
 using System.Web;
-using OpenDreamClient.Interface.Descriptors;
+using OpenDreamShared.Interface.Descriptors;
 using OpenDreamClient.Resources;
 using OpenDreamShared.Network.Messages;
 using Robust.Client.Graphics;
@@ -37,8 +37,8 @@ internal sealed class ControlBrowser : InterfaceControl {
 
     private readonly ISawmill _sawmill = Logger.GetSawmill("opendream.browser");
 
-    private PanelContainer _panel;
-    private WebViewControl _webView;
+    private PanelContainer _panel = default!;
+    private WebViewControl _webView = default!;
 
     public ControlBrowser(ControlDescriptor controlDescriptor, ControlWindow window)
         : base(controlDescriptor, window) {
@@ -48,7 +48,7 @@ internal sealed class ControlBrowser : InterfaceControl {
     protected override Control CreateUIElement() {
         _panel = new PanelContainer {
             Children = {
-                (_webView = new WebViewControl())
+                (_webView = new WebViewControl {AlwaysActive = true})
             }
         };
 

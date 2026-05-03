@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using OpenDreamShared.Dream;
 using Robust.Shared.Utility;
 
 namespace OpenDreamClient.Interface.Html;
@@ -70,7 +71,17 @@ public static class HtmlParser {
                     string tagType = attributes[0].ToLowerInvariant();
 
                     currentText.Clear();
+
                     bool isSelfClosing = IsSelfClosing(tagType, attributes);
+
+                    // remove self-closing slash if attached to tagType
+                    tagType = tagType.TrimEnd('/');
+
+                    // remove self-closing slash at end of attributes, if present
+                    if (attributes.Length > 0) {
+                        attributes[^1] = attributes[^1].TrimEnd('/');
+                    }
+
                     if (closingTag) {
                         if (isSelfClosing) {
                             // ignore closing tags of void elements since they don't
@@ -90,7 +101,12 @@ public static class HtmlParser {
                         if (!isSelfClosing) {
                             tags.Push(tagType);
                         }
-                        appendTo.PushTag(new MarkupNode(tagType, null, ParseAttributes(attributes)), selfClosing: isSelfClosing);
+
+                        if (tagType == "br") {
+                            appendTo.PushNewline();
+                        } else {
+                            appendTo.PushTag(new MarkupNode(tagType, null, ParseAttributes(attributes)), selfClosing: isSelfClosing);
+                        }
                     }
 
                     break;
@@ -135,6 +151,18 @@ public static class HtmlParser {
                     appendTo.PushNewline();
                     break;
                 default:
+                    // Not really HTML, but this is a very convenient place to put this
+                    if (c == StringFormatting.Icon) {
+                        // The appearance ID is encoded in the next 2 chars (4 bytes)
+                        var upper = (ushort)text[++i];
+                        var lower = (ushort)text[++i];
+                        var appearanceId = (uint)((upper << 16) | lower);
+
+                        PushCurrentText();
+                        appendTo.PushTag(new MarkupNode("icon", new(appearanceId), null), true);
+                        break;
+                    }
+
                     currentText.Append(c);
                     break;
             }
@@ -152,7 +180,7 @@ public static class HtmlParser {
      * </summary>
      */
     private static bool IsSelfClosing(string tagType, string[] attributes) {
-        if (attributes[^1] == "/") {
+        if (tagType.EndsWith("/") || attributes[^1].EndsWith("/")) {
             return true;
         }
 
@@ -183,7 +211,8 @@ public static class HtmlParser {
 
         for (int i = 1; i < attributes.Length; i++) { // First one should be the tag type, skip it
             string attribute = attributes[i];
-            if (attribute == "/")
+
+            if (attribute == "") // tag ended with a detached self-closing slash
                 continue;
 
             int equalsIndex = attribute.IndexOf('=');

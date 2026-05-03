@@ -61,14 +61,27 @@ public struct DreamValue : IEquatable<DreamValue> {
         get => new DreamValue(0f);
     }
 
+    public static DreamValue EmptyString {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => new DreamValue("");
+    }
+
     public readonly DreamValueType Type;
 
     private object? _refValue;
     private readonly float _floatValue;
 
+    #if TOOLS
+    //ReSharper disable once NotAccessedField.Local
+    private readonly ProfilerMemory? _tracyMemoryId; //only used for strings, since everything else is a value type or handled in DreamObject
+    #endif
+
     public DreamValue(string value) {
         DebugTools.Assert(value != null);
         Type = DreamValueType.String;
+        #if TOOLS
+        _tracyMemoryId = Profiler.BeginMemoryZone((ulong) (1+value.Length*sizeof(char)), "string");
+        #endif
         _refValue = value;
     }
 
@@ -282,6 +295,25 @@ public struct DreamValue : IEquatable<DreamValue> {
         return dl;
     }
 
+    // TODO: Replace GetValueAsDreamList with GetValueAsIDreamList if possible. IDreamList isn't complete enough yet.
+    public readonly bool TryGetValueAsIDreamList([NotNullWhen(true)] out IDreamList? list) {
+        if (_refValue is IDreamList idl) {
+            list = idl;
+            return true;
+        }
+
+        list = null;
+        return false;
+    }
+
+    public IDreamList MustGetValueAsIDreamList() {
+        if (_refValue is IDreamList idl)
+            return idl;
+
+        ThrowInvalidCastList();
+        return null!;
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void ThrowInvalidCastList() {
         throw new InvalidCastException("Value " + this + " was not the expected type of DreamList");
@@ -391,7 +423,7 @@ public struct DreamValue : IEquatable<DreamValue> {
 
             case DreamValueType.DreamResource:
                 var rsc = MustGetValueAsDreamResource();
-                return rsc.ResourcePath ?? rsc.Id.ToString();
+                return rsc.ResourcePath ?? string.Empty;
             case DreamValueType.DreamType:
                 return MustGetValueAsType().Path;
             case DreamValueType.DreamProc:

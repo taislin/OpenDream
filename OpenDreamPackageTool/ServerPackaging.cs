@@ -37,7 +37,8 @@ public static class ServerPackaging {
         "Byond.TopicSender",
         "Microsoft.Extensions.Logging.Abstractions", // dep of Byond.TopicSender
         "Microsoft.Extensions.DependencyInjection.Abstractions", // dep of above
-        "DMCompiler"
+        "DMCompiler",
+        "Tracy"
     };
 
     // Extra assemblies to copy on the server, with a startswith
@@ -49,11 +50,18 @@ public static class ServerPackaging {
         "Byond.TopicSender",
         "Microsoft.Extensions.Logging.Abstractions", // dep of Byond.TopicSender
         "Microsoft.Extensions.DependencyInjection.Abstractions", // dep of above
-        "DMCompiler"
+        "DMCompiler",
+        "Tracy"
     };
 
     private static readonly string[] ServerNotExtraAssemblies = {
         "Microsoft.CodeAnalysis"
+    };
+
+    private static readonly string[] ServerNatives = {
+        "byondcore", // Windows name for the BYONDAPI trampoline
+        "libbyond", // Linux name for the BYONDAPI trampoline
+        "TracyClient"
     };
 
     private static readonly string[] BinSkipFolders = {
@@ -149,6 +157,7 @@ public static class ServerPackaging {
         Program.CopyDirectory($"RobustToolbox/bin/Server/{platform.RId}/publish", releaseDir, BinSkipFolders);
         CopyResources(Path.Combine(releaseDir, "Resources"));
         CopyContentAssemblies(Path.Combine(releaseDir, "Resources", "Assemblies"));
+        CopyNatives(platform, releaseDir);
         if (options.HybridAcz) {
             // Hybrid ACZ expects "Content.Client.zip" (as it's not OpenDream-specific)
             ZipFile.CreateFromDirectory(Path.Combine(options.OutputDir, "OpenDreamClient"), Path.Combine(releaseDir, "Content.Client.zip"));
@@ -206,6 +215,21 @@ public static class ServerPackaging {
 
         foreach (var file in files) {
             File.Copy(Path.Combine(sourceDir, file), Path.Combine(dest, file));
+        }
+    }
+
+    private static void CopyNatives(PlatformReg platform, string releaseDir) {
+        string sourceDir = Path.Combine("bin", "Content.Server");
+        string runtimesDir = $"runtimes/{platform.RId}/";
+
+        foreach (var native in ServerNatives) {
+            var name = (platform.TargetOs == "Windows") ? $"{native}.dll" : $"{native}.so";
+            var src = Path.Combine(sourceDir, runtimesDir, $"native/{name}");
+            var dst = Path.Combine(releaseDir, name);
+            if (!File.Exists(src))
+                continue;
+
+            File.Copy(src, dst);
         }
     }
 }

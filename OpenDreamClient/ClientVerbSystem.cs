@@ -30,8 +30,6 @@ public sealed class ClientVerbSystem : VerbSystem {
         _spriteQuery = _entityManager.GetEntityQuery<DMISpriteComponent>();
         _sightQuery = _entityManager.GetEntityQuery<DreamMobSightComponent>();
 
-        _playerManager.LocalPlayerAttached += OnLocalPlayerAttached;
-
         SubscribeNetworkEvent<AllVerbsEvent>(OnAllVerbsEvent);
         SubscribeNetworkEvent<RegisterVerbEvent>(OnRegisterVerbEvent);
         SubscribeNetworkEvent<UpdateClientVerbsEvent>(OnUpdateClientVerbsEvent);
@@ -62,6 +60,14 @@ public sealed class ClientVerbSystem : VerbSystem {
     /// <remarks>The server will not execute the verb if the arguments are invalid</remarks> // TODO: I think the server actually just errors, fix that
     public void ExecuteVerb(ClientObjectReference src, int verbId, object?[] arguments) {
         RaiseNetworkEvent(new ExecuteVerbEvent(src, verbId, arguments));
+    }
+
+    public void StartRepeatingVerb(ClientObjectReference src, int verbId) {
+        RaiseNetworkEvent(new RegisterRepeatVerbEvent(src, verbId));
+    }
+
+    public void StopRepeatingVerb(ClientObjectReference src, int verbId) {
+        RaiseNetworkEvent(new UnregisterRepeatVerbEvent(src, verbId));
     }
 
     public IEnumerable<VerbInfo> GetAllVerbs() {
@@ -234,10 +240,7 @@ public sealed class ClientVerbSystem : VerbSystem {
         _interfaceManager.DefaultInfo?.RefreshVerbs(this);
     }
 
-    private void OnLocalPlayerAttached(EntityUid obj) {
-        // Our mob changed, update our verb panels
-        // A little hacky, but also wait half a second for verb information about our mob to arrive
-        // TODO: Remove this timer
-        _timerManager.AddTimer(new Timer(500, false, () => _interfaceManager.DefaultInfo?.RefreshVerbs(this)));
+    public void RefreshVerbs() {
+        _interfaceManager.DefaultInfo?.RefreshVerbs(this);
     }
 }

@@ -1,5 +1,6 @@
 using OpenDreamShared.Dream;
 using Robust.Client.Graphics;
+using OpenDreamClient.Rendering.Particles;
 
 namespace OpenDreamClient.Rendering;
 
@@ -25,6 +26,8 @@ internal sealed class RendererMetaData : IComparable<RendererMetaData> {
     public Texture? TextureOverride;
     public string? Maptext;
     public Vector2i? MaptextSize;
+    public ParticleSystem? Particles;
+    public ClientAppearanceSystem.Flick? Flick;
 
     public bool IsPlaneMaster => (AppearanceFlags & AppearanceFlags.PlaneMaster) != 0;
     public bool HasRenderSource => !string.IsNullOrEmpty(RenderSource);
@@ -56,13 +59,14 @@ internal sealed class RendererMetaData : IComparable<RendererMetaData> {
         TextureOverride = null;
         Maptext = null;
         MaptextSize = null;
+        Particles = null;
     }
 
     public Texture? GetTexture(DreamViewOverlay viewOverlay, DrawingHandleWorld handle) {
         if (MainIcon == null)
             return null;
 
-        var texture = MainIcon.GetTexture(viewOverlay, handle, this, TextureOverride);
+        var texture = MainIcon.GetTexture(viewOverlay, handle, this, TextureOverride, Flick);
         MainIcon.LastRenderedTexture = texture;
         return texture;
     }

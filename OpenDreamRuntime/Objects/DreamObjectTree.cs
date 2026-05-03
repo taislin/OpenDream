@@ -11,7 +11,6 @@ using OpenDreamRuntime.Rendering;
 using OpenDreamRuntime.Resources;
 using Robust.Server.GameObjects;
 using Robust.Server.GameStates;
-using Robust.Server.Player;
 using Robust.Shared.Map;
 using Robust.Shared.Serialization.Manager;
 using Robust.Shared.Serialization.Manager.Exceptions;
@@ -22,39 +21,44 @@ namespace OpenDreamRuntime.Objects;
 
 public sealed class DreamObjectTree {
     public TreeEntry[] Types { get; private set; }
-    public List<DreamProc> Procs { get; private set; } = new();
+    public List<DreamProc> Procs { get; } = new();
     public List<string> Strings { get; private set; } //TODO: Store this somewhere else
     public DreamProc? GlobalInitProc { get; private set; }
 
-    public TreeEntry Root { get; private set; }
-    public TreeEntry List { get; private set; }
-    public TreeEntry World { get; private set; }
-    public TreeEntry Client { get; private set; }
-    public TreeEntry Datum { get; private set; }
-    public TreeEntry Sound { get; private set; }
-    public TreeEntry Matrix { get; private set; }
-    public TreeEntry Exception { get; private set; }
-    public TreeEntry Savefile { get; private set; }
-    public TreeEntry Database { get; private set; }
-    public TreeEntry DatabaseQuery { get; private set; }
-    public TreeEntry Regex { get; private set; }
-    public TreeEntry Filter { get; private set; }
-    public TreeEntry Vector { get; private set; }
-    public TreeEntry Icon { get; private set; }
-    public TreeEntry Image { get; private set; }
-    public TreeEntry MutableAppearance { get; private set; }
-    public TreeEntry Atom { get; private set; }
-    public TreeEntry Area { get; private set; }
-    public TreeEntry Turf { get; private set; }
-    public TreeEntry Movable { get; private set; }
-    public TreeEntry Obj { get; private set; }
-    public TreeEntry Mob { get; private set; }
+    public TreeEntry Root { get; private set; } = default!;
+    public TreeEntry List { get; private set; } = default!;
+    public TreeEntry AssocList { get; private set; } = default!;
+    public TreeEntry World { get; private set; } = default!;
+    public TreeEntry Client { get; private set; } = default!;
+    public TreeEntry Datum { get; private set; } = default!;
+    public TreeEntry Sound { get; private set; } = default!;
+    public TreeEntry Matrix { get; private set; } = default!;
+    public TreeEntry Exception { get; private set; } = default!;
+    public TreeEntry Callee { get; private set; } = default!;
+    public TreeEntry Savefile { get; private set; } = default!;
+    public TreeEntry Database { get; private set; } = default!;
+    public TreeEntry DatabaseQuery { get; private set; } = default!;
+    public TreeEntry Regex { get; private set; } = default!;
+    public TreeEntry Filter { get; private set; } = default!;
+    public TreeEntry Vector { get; private set; } = default!;
+    public TreeEntry Icon { get; private set; } = default!;
+    public TreeEntry Image { get; private set; } = default!;
+    public TreeEntry MutableAppearance { get; private set; } = default!;
+    public TreeEntry Atom { get; private set; } = default!;
+    public TreeEntry Area { get; private set; } = default!;
+    public TreeEntry Turf { get; private set; } = default!;
+    public TreeEntry Movable { get; private set; } = default!;
+    public TreeEntry Obj { get; private set; } = default!;
+    public TreeEntry Mob { get; private set; } = default!;
+    public TreeEntry Generator { get; private set; } = default!;
+    public TreeEntry Particles { get; private set; } = default!;
 
     private FrozenDictionary<string, TreeEntry> _pathToType = FrozenDictionary<string, TreeEntry>.Empty;
     private FrozenDictionary<string, int> _globalProcIds = FrozenDictionary<string, int>.Empty;
 
     [Dependency] private readonly AtomManager _atomManager = default!;
     [Dependency] private readonly DreamManager _dreamManager = default!;
+    [Dependency] private readonly DreamRefManager _refManager = default!;
     [Dependency] private readonly IDreamMapManager _dreamMapManager = default!;
     [Dependency] private readonly IMapManager _mapManager = default!;
     [Dependency] private readonly IDreamDebugManager _dreamDebugManager = default!;
@@ -62,7 +66,6 @@ public sealed class DreamObjectTree {
     [Dependency] private readonly IEntityManager _entityManager = default!;
     [Dependency] private readonly DreamResourceManager _dreamResourceManager = default!;
     [Dependency] private readonly WalkManager _walkManager = default!;
-    [Dependency] private readonly IPlayerManager _playerManager = default!;
     [Dependency] private readonly ISerializationManager _serializationManager = default!;
     [Dependency] private readonly ProcScheduler _procScheduler = default!;
     private ServerAppearanceSystem? _appearanceSystem;
@@ -70,9 +73,10 @@ public sealed class DreamObjectTree {
     private PvsOverrideSystem? _pvsOverrideSystem;
     private MetaDataSystem? _metaDataSystem;
     private ServerVerbSystem? _verbSystem;
+    private ServerDreamParticlesSystem? _particlesSystem;
 
     public void LoadJson(DreamCompiledJson json) {
-        var types = json.Types ?? Array.Empty<DreamTypeJson>();
+        var types = json.Types;
         if (types.Length == 0 || types[0].Path != "/")
             throw new ArgumentException("The first type must be root!", nameof(json));
 
@@ -83,11 +87,12 @@ public sealed class DreamObjectTree {
         _entitySystemManager.TryGetEntitySystem(out _pvsOverrideSystem);
         _entitySystemManager.TryGetEntitySystem(out _metaDataSystem);
         _entitySystemManager.TryGetEntitySystem(out _verbSystem);
+        _entitySystemManager.TryGetEntitySystem(out _particlesSystem);
 
-        Strings = json.Strings ?? new();
+        Strings = json.Strings;
 
         if (json.GlobalInitProc is { } initProcDef) {
-            GlobalInitProc = new DMProc(0, Root, initProcDef, "<global init>", _dreamManager, _atomManager, _dreamMapManager, _dreamDebugManager, _dreamResourceManager, this, _procScheduler, _verbSystem);
+            GlobalInitProc = new DMProc(0, Root, initProcDef, "<global init>", _dreamManager, _refManager, _atomManager, _dreamMapManager, _dreamDebugManager, _dreamResourceManager, this, _procScheduler, _verbSystem);
         } else {
             GlobalInitProc = null;
         }
@@ -146,6 +151,8 @@ public sealed class DreamObjectTree {
     public DreamObject CreateObject(TreeEntry type) {
         if (type == List)
             return CreateList();
+        if (type == AssocList)
+            return CreateAssocList();
         if (type == Savefile)
             return new DreamObjectSavefile(Savefile.ObjectDefinition);
         if (type.ObjectDefinition.IsSubtypeOf(DatabaseQuery))
@@ -172,14 +179,20 @@ public sealed class DreamObjectTree {
             return new DreamObjectArea(type.ObjectDefinition);
         if (type.ObjectDefinition.IsSubtypeOf(Atom))
             return new DreamObjectAtom(type.ObjectDefinition);
+        if (type.ObjectDefinition.IsSubtypeOf(Particles))
+            return new DreamObjectParticles(type.ObjectDefinition);
         if (type.ObjectDefinition.IsSubtypeOf(Client))
             throw new Exception("Cannot create objects of type /client");
         if (type.ObjectDefinition.IsSubtypeOf(Turf))
             throw new Exception("New turfs must be created by the map manager");
         if (type.ObjectDefinition.IsSubtypeOf(Exception))
             return new DreamObjectException(type.ObjectDefinition);
+        if (type.ObjectDefinition.IsSubtypeOf(Callee))
+            return new DreamObjectCallee(type.ObjectDefinition);
         if (type.ObjectDefinition.IsSubtypeOf(Vector))
             return new DreamObjectVector(type.ObjectDefinition);
+        if (type.ObjectDefinition.IsSubtypeOf(Generator))
+            return new DreamObjectGenerator(type.ObjectDefinition);
 
         return new DreamObject(type.ObjectDefinition);
     }
@@ -196,11 +209,15 @@ public sealed class DreamObjectTree {
     public DreamList CreateList(string[] elements) {
         DreamList list = CreateList(elements.Length);
 
-        foreach (String value in elements) {
+        foreach (string value in elements) {
             list.AddValue(new DreamValue(value));
         }
 
         return list;
+    }
+
+    public DreamAssocList CreateAssocList(int size = 0) {
+        return new DreamAssocList(AssocList.ObjectDefinition, size);
     }
 
     public DreamValue GetDreamValueFromJsonElement(object? value) {
@@ -236,7 +253,7 @@ public sealed class DreamObjectTree {
                         return new DreamValue(Types[typeValue.GetInt32()]);
                     case JsonVariableType.Proc:
                         return new DreamValue(Procs[jsonElement.GetProperty("value").GetInt32()]);
-                    case JsonVariableType.List:
+                    case JsonVariableType.List: {
                         DreamList list = CreateList();
 
                         if (jsonElement.TryGetProperty("values", out JsonElement values)) {
@@ -256,6 +273,25 @@ public sealed class DreamObjectTree {
                         }
 
                         return new DreamValue(list);
+                    }
+                    case JsonVariableType.AList: {
+                        DreamAssocList aList = CreateAssocList();
+
+                        if (jsonElement.TryGetProperty("values", out JsonElement values)) {
+                            foreach (JsonElement listValue in values.EnumerateArray()) {
+                                if (listValue.ValueKind != JsonValueKind.Object ||
+                                    !listValue.TryGetProperty("key", out var jsonKey) ||
+                                    !listValue.TryGetProperty("value", out var jsonValue)) {
+                                    throw new Exception("AList value was missing a key or value property");
+                                }
+
+                                aList.SetValue(GetDreamValueFromJsonElement(jsonKey),
+                                    GetDreamValueFromJsonElement(jsonValue));
+                            }
+                        }
+
+                        return new DreamValue(aList);
+                    }
                     case JsonVariableType.PositiveInfinity:
                         return new DreamValue(float.PositiveInfinity);
                     case JsonVariableType.NegativeInfinity:
@@ -287,11 +323,13 @@ public sealed class DreamObjectTree {
 
         World = GetTreeEntry("/world");
         List = GetTreeEntry("/list");
+        AssocList = GetTreeEntry("/alist");
         Client = GetTreeEntry("/client");
         Datum = GetTreeEntry("/datum");
         Sound = GetTreeEntry("/sound");
         Matrix = GetTreeEntry("/matrix");
         Exception = GetTreeEntry("/exception");
+        Callee = GetTreeEntry("/callee");
         Savefile = GetTreeEntry("/savefile");
         Database = GetTreeEntry("/database");
         DatabaseQuery = GetTreeEntry("/database/query");
@@ -307,6 +345,8 @@ public sealed class DreamObjectTree {
         Movable = GetTreeEntry("/atom/movable");
         Obj = GetTreeEntry("/obj");
         Mob = GetTreeEntry("/mob");
+        Particles = GetTreeEntry("/particles");
+        Generator = GetTreeEntry("/generator");
 
         // Load procs first so types can set their init proc's super proc
         LoadProcsFromJson(procs, globalProcs);
@@ -331,7 +371,7 @@ public sealed class DreamObjectTree {
         foreach (TreeEntry type in GetAllDescendants(Root)) {
             int typeId = type.Id;
             DreamTypeJson jsonType = types[typeId];
-            var definition = new DreamObjectDefinition(_dreamManager, this, _atomManager, _dreamMapManager, _mapManager, _dreamResourceManager, _walkManager, _entityManager, _playerManager, _serializationManager, _appearanceSystem, _transformSystem, _pvsOverrideSystem, _metaDataSystem, _verbSystem, type);
+            var definition = new DreamObjectDefinition(_dreamManager, _refManager, this, _atomManager, _dreamMapManager, _mapManager, _dreamResourceManager, _walkManager, _entityManager, _serializationManager, _appearanceSystem, _transformSystem, _pvsOverrideSystem, _metaDataSystem, _verbSystem, _particlesSystem, type);
 
             type.ObjectDefinition = definition;
             type.TreeIndex = treeIndex++;
@@ -350,7 +390,11 @@ public sealed class DreamObjectTree {
 
             if (jsonType.Verbs != null) {
                 definition.Verbs ??= new(jsonType.Verbs.Count);
-                definition.Verbs.AddRange(jsonType.Verbs);
+
+                foreach (var verbName in jsonType.Verbs) {
+                    var verb = definition.GetProc(verbName);
+                    definition.Verbs[verb.Name] = verb.Id;
+                }
             }
 
             if (jsonType.InitProc != null) {
@@ -420,7 +464,7 @@ public sealed class DreamObjectTree {
 
     public DreamProc LoadProcJson(int id, ProcDefinitionJson procDefinition) {
         TreeEntry owningType = Types[procDefinition.OwningTypeId];
-        return new DMProc(id, owningType, procDefinition, null, _dreamManager,
+        return new DMProc(id, owningType, procDefinition, null, _dreamManager, _refManager,
             _atomManager, _dreamMapManager, _dreamDebugManager, _dreamResourceManager, this, _procScheduler, _verbSystem);
     }
 
@@ -451,13 +495,13 @@ public sealed class DreamObjectTree {
 
     internal NativeProc CreateNativeProc(TreeEntry owningType, NativeProc.HandlerFn func) {
         var (name, defaultArgumentValues, argumentNames) = NativeProc.GetNativeInfo(func);
-        var proc = new NativeProc(Procs.Count, owningType, name, argumentNames, defaultArgumentValues, func, _dreamManager, _atomManager, _dreamMapManager, _dreamResourceManager, _walkManager, this);
+        var proc = new NativeProc(Procs.Count, owningType, name, argumentNames, defaultArgumentValues, func, _dreamManager, _refManager, _atomManager, _dreamMapManager, _dreamResourceManager, _walkManager, this);
 
         Procs.Add(proc);
         return proc;
     }
 
-    private AsyncNativeProc CreateAsyncNativeProc(TreeEntry owningType, Func<AsyncNativeProc.State, Task<DreamValue>> func) {
+    private AsyncNativeProc CreateAsyncNativeProc(TreeEntry owningType, Func<AsyncNativeProc.AsyncNativeProcState, Task<DreamValue>> func) {
         var (name, defaultArgumentValues, argumentNames) = NativeProc.GetNativeInfo(func);
         var proc = new AsyncNativeProc(Procs.Count, owningType, name, argumentNames, defaultArgumentValues, func);
 
@@ -467,12 +511,12 @@ public sealed class DreamObjectTree {
 
     internal void SetGlobalNativeProc(NativeProc.HandlerFn func) {
         var (name, defaultArgumentValues, argumentNames) = NativeProc.GetNativeInfo(func);
-        var proc = new NativeProc(_globalProcIds[name], Root, name, argumentNames, defaultArgumentValues, func, _dreamManager, _atomManager, _dreamMapManager, _dreamResourceManager, _walkManager, this);
+        var proc = new NativeProc(_globalProcIds[name], Root, name, argumentNames, defaultArgumentValues, func, _dreamManager, _refManager, _atomManager, _dreamMapManager, _dreamResourceManager, _walkManager, this);
 
         Procs[proc.Id] = proc;
     }
 
-    public void SetGlobalNativeProc(Func<AsyncNativeProc.State, Task<DreamValue>> func) {
+    public void SetGlobalNativeProc(Func<AsyncNativeProc.AsyncNativeProcState, Task<DreamValue>> func) {
         var (name, defaultArgumentValues, argumentNames) = NativeProc.GetNativeInfo(func);
         var proc = new AsyncNativeProc(_globalProcIds[name], Root, name, argumentNames, defaultArgumentValues, func);
 
@@ -485,7 +529,7 @@ public sealed class DreamObjectTree {
         type.ObjectDefinition.SetProcDefinition(proc.Name, proc.Id);
     }
 
-    public void SetNativeProc(TreeEntry type, Func<AsyncNativeProc.State, Task<DreamValue>> func) {
+    public void SetNativeProc(TreeEntry type, Func<AsyncNativeProc.AsyncNativeProcState, Task<DreamValue>> func) {
         var proc = CreateAsyncNativeProc(type, func);
 
         type.ObjectDefinition.SetProcDefinition(proc.Name, proc.Id);

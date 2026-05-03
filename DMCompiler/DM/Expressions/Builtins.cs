@@ -1,5 +1,6 @@
 using DMCompiler.Bytecode;
 using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
 using DMCompiler.Compiler;
 using DMCompiler.Json;
 
@@ -50,6 +51,7 @@ internal sealed class StringFormat(Location location, string value, DMExpression
 internal sealed class Arglist(Location location, DMExpression expr) : DMExpression(location) {
     public override void EmitPushValue(ExpressionContext ctx) {
         ctx.Compiler.Emit(WarningCode.BadExpression, Location, "invalid use of arglist");
+        ctx.Proc.PushNullAndError();
     }
 
     public void EmitPushArglist(ExpressionContext ctx) {
@@ -66,13 +68,15 @@ internal sealed class New(DMCompiler compiler, Location location, DMExpression e
     public override void EmitPushValue(ExpressionContext ctx) {
         var argumentInfo = arguments.EmitArguments(ctx, null);
 
+        ctx.Proc.PushNull();
         expr.EmitPushValue(ctx);
         ctx.Proc.CreateObject(argumentInfo.Type, argumentInfo.StackSize);
     }
 }
 
 // new /x/y/z (...)
-internal sealed class NewPath(DMCompiler compiler, Location location, IConstantPath create, ArgumentList arguments) : DMExpression(location) {
+internal sealed class NewPath(DMCompiler compiler, Location location, IConstantPath create,
+    Dictionary<string, object?>? variableOverrides, ArgumentList arguments) : DMExpression(location) {
     public override DreamPath? Path => (create is ConstantTypeReference typeReference) ? typeReference.Path : null;
     public override DMComplexValueType ValType => Path?.GetAtomType(compiler) ?? DMValueType.Anything;
 
@@ -86,10 +90,23 @@ internal sealed class NewPath(DMCompiler compiler, Location location, IConstantP
                 var newProc = ctx.ObjectTree.GetNewProc(typeReference.Value.Id);
 
                 (argumentsType, stackSize) = arguments.EmitArguments(ctx, newProc);
+                if (variableOverrides is null || variableOverrides.Count == 0) {
+                    ctx.Proc.PushNull();
+                } else {
+                    ctx.Proc.PushString(JsonSerializer.Serialize(variableOverrides));
+                }
+
                 ctx.Proc.PushType(typeReference.Value.Id);
                 break;
             case ConstantProcReference procReference: // "new /proc/new_verb(Destination)" is a thing
                 (argumentsType, stackSize) = arguments.EmitArguments(ctx, ctx.ObjectTree.AllProcs[procReference.Value.Id]);
+                if(variableOverrides is not null && variableOverrides.Count > 0) {
+                    ctx.Compiler.Emit(WarningCode.BadExpression, Location, "Cannot add a Var Override to a proc");
+                    ctx.Proc.Error();
+                    return;
+                }
+
+                ctx.Proc.PushNull();
                 ctx.Proc.PushProc(procReference.Value.Id);
                 break;
             default:
@@ -109,7 +126,8 @@ internal sealed class LocateInferred(Location location, DreamPath path, DMExpres
     public override void EmitPushValue(ExpressionContext ctx) {
         if (!ctx.ObjectTree.TryGetTypeId(path, out var typeId)) {
             ctx.Compiler.Emit(WarningCode.ItemDoesntExist, Location, $"Type {path} does not exist");
-
+            ctx.Proc.PushNull(); // prevents a negative stack size error
+            ctx.Proc.Error();
             return;
         }
 
@@ -188,6 +206,63 @@ internal sealed class Rgb(Location location, ArgumentList arguments) : DMExpress
 
         ctx.Proc.Rgb(argInfo.Type, argInfo.StackSize);
     }
+
+    // TODO: This needs to have full parity with the rgb opcode. This is a simplified implementation for the most common case rgb(R, G, B)
+    public override bool TryAsConstant(DMCompiler compiler, [NotNullWhen(true)] out Constant? constant) {
+        (string?, float?)[] values = new (string?, float?)[arguments.Length];
+
+        bool validArgs = true;
+
+        if (arguments.Length < 3 || arguments.Length > 5) {
+            compiler.Emit(WarningCode.BadExpression, Location, $"rgb: expected 3 to 5 arguments (found {arguments.Length})");
+            constant = null;
+            return false;
+        }
+
+        for (var index = 0; index < arguments.Expressions.Length; index++) {
+            var (name, expr) = arguments.Expressions[index];
+            if (!expr.TryAsConstant(compiler, out var constExpr)) {
+                constant = null;
+                return false;
+            }
+
+            if (constExpr is not Number num) {
+                validArgs = false;
+                values[index] = (name, null);
+                continue;
+            }
+
+            values[index] = (name, num.Value);
+        }
+
+        if (!validArgs) {
+            compiler.Emit(WarningCode.FallbackBuiltinArgument, Location,
+                "Non-numerical rgb argument(s) will always return \"00\"");
+        }
+
+        string result;
+        try {
+            result = SharedOperations.ParseRgb(values);
+        } catch (Exception e) {
+            compiler.Emit(WarningCode.BadExpression, Location, e.Message);
+            constant = null;
+            return false;
+        }
+
+        constant = new String(Location, result);
+
+        return true;
+    }
+}
+
+// Animate(...)
+internal sealed class Animate(Location location, ArgumentList arguments) : DMExpression(location) {
+    public override void EmitPushValue(ExpressionContext ctx) {
+        ctx.ObjectTree.TryGetGlobalProc("animate", out var dmProc);
+        var argInfo = arguments.EmitArguments(ctx, dmProc);
+
+        ctx.Proc.Animate(argInfo.Type, argInfo.StackSize);
+    }
 }
 
 // pick(prob(50);x, prob(200);y)
@@ -210,7 +285,7 @@ internal sealed class Pick(Location location, Pick.PickValue[] values) : DMExpre
 
         if (weighted) {
             if (values.Length == 1) {
-                ctx.Compiler.ForcedWarning(Location, "Weighted pick() with one argument");
+                ctx.Compiler.Emit(WarningCode.InvalidArgumentCount, Location, "Weighted pick() with one argument"); // BYOND errors with "extra args"
             }
 
             ctx.Compiler.Emit(WarningCode.PickWeightedSyntax, Location, "Use of weighted pick() syntax");
@@ -273,26 +348,15 @@ internal sealed class IsSaved(Location location, DMExpression expr) : DMExpressi
     public override DMComplexValueType ValType => DMValueType.Num;
 
     public override void EmitPushValue(ExpressionContext ctx) {
-        switch (expr) {
-            case Dereference deref:
-                deref.EmitPushIsSaved(ctx);
-                return;
-            case Field field:
-                field.EmitPushIsSaved(ctx.Proc);
-                return;
-            case Local:
-                ctx.Proc.PushFloat(0);
-                return;
-            default:
-                ctx.Compiler.Emit(WarningCode.BadArgument, expr.Location, $"can't get saved value of {expr}");
-                ctx.Proc.Error();
-                return;
-        }
+        expr.EmitPushIsSaved(ctx);
     }
 }
 
 // astype(x, y)
 internal sealed class AsType(Location location, DMExpression expr, DMExpression path) : DMExpression(location) {
+    public override DreamPath? Path => path.Path;
+    public override bool PathIsFuzzy => path is not ConstantTypeReference;
+
     public override void EmitPushValue(ExpressionContext ctx) {
         expr.EmitPushValue(ctx);
         path.EmitPushValue(ctx);
@@ -302,10 +366,12 @@ internal sealed class AsType(Location location, DMExpression expr, DMExpression 
 
 // astype(x)
 internal sealed class AsTypeInferred(Location location, DMExpression expr, DreamPath path) : DMExpression(location) {
+    public override DreamPath? Path => path;
+
     public override void EmitPushValue(ExpressionContext ctx) {
         if (!ctx.ObjectTree.TryGetTypeId(path, out var typeId)) {
             ctx.Compiler.Emit(WarningCode.ItemDoesntExist, Location, $"Type {path} does not exist");
-
+            ctx.Proc.PushNullAndError();
             return;
         }
 
@@ -333,7 +399,7 @@ internal sealed class IsTypeInferred(Location location, DMExpression expr, Dream
     public override void EmitPushValue(ExpressionContext ctx) {
         if (!ctx.ObjectTree.TryGetTypeId(path, out var typeId)) {
             ctx.Compiler.Emit(WarningCode.ItemDoesntExist, Location, $"Type {path} does not exist");
-
+            ctx.Proc.PushNullAndError();
             return;
         }
 
@@ -461,6 +527,50 @@ internal sealed class List : DMExpression {
     }
 }
 
+// alist(...)
+internal sealed class AList(Location location, (DMExpression Key, DMExpression Value)[] values) : DMExpression(location) {
+    public override bool PathIsFuzzy => true;
+    public override DMComplexValueType ValType => DreamPath.AList;
+
+    public override void EmitPushValue(ExpressionContext ctx) {
+        foreach (var value in values) {
+            value.Key.EmitPushValue(ctx);
+            value.Value.EmitPushValue(ctx);
+        }
+
+        ctx.Proc.CreateStrictAssociativeList(values.Length);
+    }
+
+    public override bool TryAsJsonRepresentation(DMCompiler compiler, out object? json) {
+        List<object?> values1 = new();
+
+        foreach (var value in values) {
+            if (!value.Value.TryAsJsonRepresentation(compiler, out var jsonValue)) {
+                json = null;
+                return false;
+            }
+
+            // Null key is not supported here
+            if (!value.Key.TryAsJsonRepresentation(compiler, out var jsonKey) || jsonKey == null) {
+                json = null;
+                return false;
+            }
+
+            values1.Add(new Dictionary<object, object?> {
+                { "key", jsonKey },
+                { "value", jsonValue }
+            });
+        }
+
+        json = new Dictionary<string, object> {
+            { "type", JsonVariableType.AList },
+            { "values", values1 }
+        };
+
+        return true;
+    }
+}
+
 // Value of var/list/L[1][2][3]
 internal sealed class DimensionalList(Location location, DMExpression[] sizes) : DMExpression(location) {
     public override void EmitPushValue(ExpressionContext ctx) {
@@ -479,6 +589,7 @@ internal sealed class NewList(Location location, DMExpression[] parameters) : DM
 
     public override void EmitPushValue(ExpressionContext ctx) {
         foreach (DMExpression parameter in parameters) {
+            ctx.Proc.PushNull();
             parameter.EmitPushValue(ctx);
             ctx.Proc.CreateObject(DMCallArgumentsType.None, 0);
         }
@@ -537,7 +648,7 @@ internal class Initial(Location location, DMExpression expr) : DMExpression(loca
         }
 
         ctx.Compiler.Emit(WarningCode.BadArgument, Expression.Location, $"can't get initial value of {Expression}");
-        ctx.Proc.Error();
+        ctx.Proc.PushNullAndError();
     }
 }
 
@@ -612,6 +723,11 @@ internal sealed class Sin(Location location, DMExpression expr) : DMExpression(l
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         ctx.Proc.Sin();
     }
@@ -637,6 +753,11 @@ internal sealed class Cos(Location location, DMExpression expr) : DMExpression(l
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         ctx.Proc.Cos();
     }
@@ -662,6 +783,11 @@ internal sealed class Tan(Location location, DMExpression expr) : DMExpression(l
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         ctx.Proc.Tan();
     }
@@ -692,6 +818,11 @@ internal sealed class ArcSin(Location location, DMExpression expr) : DMExpressio
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         ctx.Proc.ArcSin();
     }
@@ -722,6 +853,11 @@ internal sealed class ArcCos(Location location, DMExpression expr) : DMExpressio
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         ctx.Proc.ArcCos();
     }
@@ -747,6 +883,11 @@ internal sealed class ArcTan(Location location, DMExpression expr) : DMExpressio
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         ctx.Proc.ArcTan();
     }
@@ -776,6 +917,11 @@ internal sealed class ArcTan2(Location location, DMExpression xExpr, DMExpressio
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         xExpr.EmitPushValue(ctx);
         yExpr.EmitPushValue(ctx);
         ctx.Proc.ArcTan2();
@@ -807,6 +953,11 @@ internal sealed class Sqrt(Location location, DMExpression expr) : DMExpression(
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         ctx.Proc.Sqrt();
     }
@@ -849,6 +1000,11 @@ internal sealed class Log(Location location, DMExpression expr, DMExpression? ba
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         if (baseExpr == null) {
             ctx.Proc.LogE();
@@ -879,6 +1035,11 @@ internal sealed class Abs(Location location, DMExpression expr) : DMExpression(l
     }
 
     public override void EmitPushValue(ExpressionContext ctx) {
+        if (TryAsConstant(ctx.Compiler, out var constant)) {
+            constant.EmitPushValue(ctx);
+            return;
+        }
+
         expr.EmitPushValue(ctx);
         ctx.Proc.Abs();
     }

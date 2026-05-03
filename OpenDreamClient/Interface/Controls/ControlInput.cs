@@ -1,15 +1,15 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using OpenDreamClient.Interface.Descriptors;
-using OpenDreamClient.Interface.DMF;
+using OpenDreamShared.Interface.Descriptors;
+using OpenDreamShared.Interface.DMF;
 using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
 
 namespace OpenDreamClient.Interface.Controls;
 
-internal sealed class ControlInput : InterfaceControl {
-    private LineEdit _textBox;
+internal sealed class ControlInput(ControlDescriptor controlDescriptor, ControlWindow window) : InterfaceControl(controlDescriptor, window) {
+    private LineEdit _textBox = default!;
 
-    public ControlInput(ControlDescriptor controlDescriptor, ControlWindow window) : base(controlDescriptor, window) { }
+    private ControlDescriptorInput InputDescriptor => (ControlDescriptorInput)ControlDescriptor;
 
     protected override Control CreateUIElement() {
         _textBox = new LineEdit();
@@ -19,14 +19,23 @@ internal sealed class ControlInput : InterfaceControl {
     }
 
     private void TextBox_OnSubmit(LineEdit.LineEditEventArgs lineEditEventArgs) {
-        _interfaceManager.RunCommand(_textBox.Text);
-        _textBox.Clear();
+        if (InputDescriptor.NoCommand.Value)
+            return;
+
+        ResetText();
+
+        var command = InputDescriptor.Command.Value;
+        if (command.StartsWith('!')) {
+            _interfaceManager.RunCommand(lineEditEventArgs.Text);
+        } else {
+            _interfaceManager.RunCommand(command + lineEditEventArgs.Text);
+        }
     }
 
     protected override void UpdateElementDescriptor() {
         base.UpdateElementDescriptor();
-        ControlDescriptorInput inputDescriptor = (ControlDescriptorInput)ElementDescriptor;
-        _textBox.Text = inputDescriptor.Text.AsRaw();
+
+        ResetText();
     }
 
     public override bool TryGetProperty(string property, [NotNullWhen(true)] out IDMFProperty? value) {
@@ -36,6 +45,32 @@ internal sealed class ControlInput : InterfaceControl {
                 return true;
             default:
                 return base.TryGetProperty(property, out value);
+        }
+    }
+
+    public override void SetProperty(string property, string value, bool manualWinset = false) {
+        switch (property) {
+            case "focus":
+                var focusValue = new DMFPropertyBool(value);
+                if (focusValue.Value)
+                    _textBox.GrabKeyboardFocus();
+                break;
+            case "text":
+                _textBox.Text = value;
+                break;
+            default:
+                base.SetProperty(property, value, manualWinset);
+                break;
+        }
+    }
+
+    private void ResetText() {
+        var command = InputDescriptor.Command.Value;
+
+        if (command.StartsWith('!')) {
+            _textBox.Text = command[1..];
+        } else {
+            _textBox.Clear();
         }
     }
 }

@@ -42,8 +42,23 @@ namespace OpenDreamRuntime.Procs {
 
         public override DreamProc? Proc => null;
 
+        #if TOOLS
+        public override (string SourceFile, int Line) TracyLocationId => ($"new {_dreamObject.ObjectDefinition.Type}",0);
+        #endif
+
         public override void AppendStackFrame(StringBuilder builder) {
             builder.AppendLine($"new {_dreamObject.ObjectDefinition.Type}");
+        }
+
+        public override ReadOnlySpan<DreamValue> GetArguments() {
+            return _arguments.AsSpan(0, ArgumentCount);
+        }
+
+        public override void SetArgument(int id, DreamValue value) {
+            if (id < 0 || id >= ArgumentCount)
+                throw new IndexOutOfRangeException($"Given argument id ({id}) was out of range");
+
+            _arguments[id] = value;
         }
 
         public override void Dispose() {

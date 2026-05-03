@@ -14,22 +14,30 @@ using Dependency = Robust.Shared.IoC.DependencyAttribute;
 namespace OpenDreamRuntime;
 
 public sealed class AtomManager {
-    public int AtomCount { get; private set; }
+    public int AtomCount {
+        get {
+            ReadOnlySpan<RefType> atomTypes = [
+                RefType.DreamObjectArea,
+                RefType.DreamObjectTurf,
+                RefType.DreamObjectMovable,
+                RefType.DreamObjectMob
+            ];
+
+            int count = 0;
+            foreach (var atomType in atomTypes) {
+                count += _refManager.GetCountOf(atomType);
+            }
+
+            return count;
+        }
+    }
 
     [Dependency] private readonly IEntityManager _entityManager = default!;
     [Dependency] private readonly IEntitySystemManager _entitySystemManager = default!;
     [Dependency] private readonly DreamObjectTree _objectTree = default!;
     [Dependency] private readonly IDreamMapManager _dreamMapManager = default!;
     [Dependency] private readonly DreamResourceManager _resourceManager = default!;
-
-    private readonly List<DreamObjectMob?> _mobs = new();
-    private readonly List<DreamObjectMovable?> _movables = new();
-    private readonly List<DreamObjectArea?> _areas = new();
-    private readonly List<DreamObjectTurf?> _turfs = new();
-    private int _nextEmptyMobSlot;
-    private int _nextEmptyMovableSlot;
-    private int _nextEmptyAreaSlot;
-    private int _nextEmptyTurfSlot;
+    [Dependency] private readonly DreamRefManager _refManager = default!;
 
     private readonly Dictionary<EntityUid, DreamObjectMovable> _entityToAtom = new();
     private readonly Dictionary<DreamObjectDefinition, MutableAppearance> _definitionAppearanceCache = new();
@@ -37,33 +45,28 @@ public sealed class AtomManager {
 
     private ServerAppearanceSystem? AppearanceSystem {
         get {
-            if(_appearanceSystem is null)
-                _entitySystemManager.TryGetEntitySystem(out _appearanceSystem);
-            return _appearanceSystem;
+            if(field is null)
+                _entitySystemManager.TryGetEntitySystem(out field);
+            return field;
         }
     }
 
     private DMISpriteSystem? DMISpriteSystem {
         get {
-            if(_dmiSpriteSystem is null)
-                _entitySystemManager.TryGetEntitySystem(out _dmiSpriteSystem);
-            return _dmiSpriteSystem;
+            if(field is null)
+                _entitySystemManager.TryGetEntitySystem(out field);
+            return field;
         }
     }
 
     private ServerVerbSystem? VerbSystem {
         get {
-            if(_verbSystem is null)
-                _entitySystemManager.TryGetEntitySystem(out _verbSystem);
-            return _verbSystem;
+            if(field is null)
+                _entitySystemManager.TryGetEntitySystem(out field);
+            return field;
         }
     }
 
-    private ServerAppearanceSystem? _appearanceSystem;
-    private ServerVerbSystem? _verbSystem;
-    private DMISpriteSystem? _dmiSpriteSystem;
-
-    // ReSharper disable ForCanBeConvertedToForeach (the collections could be added to)
     public IEnumerable<DreamObjectAtom> EnumerateAtoms(TreeEntry? filterType = null) {
         // Order of world.contents:
         //  Mobs + Other Movables + Areas + Turfs
@@ -72,144 +75,31 @@ public sealed class AtomManager {
             filterType = null;
 
         if (filterType?.IsSubtypeOf(_objectTree.Mob) != false) {
-            for (int i = 0; i < _mobs.Count; i++) {
-                var mob = _mobs[i];
-
-                if (mob != null && (filterType == null || mob.IsSubtypeOf(filterType)))
-                    yield return mob;
+            foreach (var mob in _refManager.EnumerateType(RefType.DreamObjectMob)) {
+                if (filterType == null || mob.IsSubtypeOf(filterType))
+                    yield return (DreamObjectMob)mob;
             }
         }
 
         if (filterType?.IsSubtypeOf(_objectTree.Movable) != false) {
-            for (int i = 0; i < _movables.Count; i++) {
-                var movable = _movables[i];
-                if (movable != null && (filterType == null || movable.IsSubtypeOf(filterType)))
-                    yield return movable;
+            foreach (var movable in _refManager.EnumerateType(RefType.DreamObjectMovable)) {
+                if (filterType == null || movable.IsSubtypeOf(filterType))
+                    yield return (DreamObjectMovable)movable;
             }
         }
 
         if (filterType?.IsSubtypeOf(_objectTree.Area) != false) {
-            for (int i = 0; i < _areas.Count; i++) {
-                var area = _areas[i];
-                if (area != null && (filterType == null || area.IsSubtypeOf(filterType)))
-                    yield return area;
+            foreach (var area in _refManager.EnumerateType(RefType.DreamObjectArea)) {
+                if (filterType == null || area.IsSubtypeOf(filterType))
+                    yield return (DreamObjectArea)area;
             }
         }
 
         if (filterType?.IsSubtypeOf(_objectTree.Turf) != false) {
-            for (int i = 0; i < _turfs.Count; i++) {
-                var turf = _turfs[i];
-                if (turf != null && (filterType == null || turf.IsSubtypeOf(filterType)))
-                    yield return turf;
+            foreach (var turf in _refManager.EnumerateType(RefType.DreamObjectTurf)) {
+                if (filterType == null || turf.IsSubtypeOf(filterType))
+                    yield return (DreamObjectTurf)turf;
             }
-        }
-    }
-    // ReSharper restore ForCanBeConvertedToForeach
-
-    public void AddAtom(DreamObjectAtom atom) {
-        AtomCount++;
-
-        switch (atom) {
-            case DreamObjectArea area: {
-                var nextSlot = _nextEmptyAreaSlot++;
-                if (nextSlot >= _areas.Count) {
-                    _areas.Add(area);
-                    return;
-                }
-
-                _areas[nextSlot] = area;
-                for (; _nextEmptyAreaSlot < _areas.Count; _nextEmptyAreaSlot++) {
-                    if (_areas[_nextEmptyAreaSlot] == null)
-                        break;
-                }
-
-                break;
-            }
-            case DreamObjectTurf turf: {
-                var nextSlot = _nextEmptyTurfSlot++;
-                if (nextSlot >= _turfs.Count) {
-                    _turfs.Add(turf);
-                    return;
-                }
-
-                _turfs[nextSlot] = turf;
-                for (; _nextEmptyTurfSlot < _turfs.Count; _nextEmptyTurfSlot++) {
-                    if (_turfs[_nextEmptyTurfSlot] == null)
-                        break;
-                }
-
-                break;
-            }
-            case DreamObjectMob mob: {
-                var nextSlot = _nextEmptyMobSlot++;
-                if (nextSlot >= _mobs.Count) {
-                    _mobs.Add(mob);
-                    return;
-                }
-
-                _mobs[nextSlot] = mob;
-                for (; _nextEmptyMobSlot < _mobs.Count; _nextEmptyMobSlot++) {
-                    if (_mobs[_nextEmptyMobSlot] == null)
-                        break;
-                }
-
-                break;
-            }
-            case DreamObjectMovable movable: {
-                var nextSlot = _nextEmptyMovableSlot++;
-                if (nextSlot >= _movables.Count) {
-                    _movables.Add(movable);
-                    return;
-                }
-
-                _movables[nextSlot] = movable;
-                for (; _nextEmptyMovableSlot < _movables.Count; _nextEmptyMovableSlot++) {
-                    if (_movables[_nextEmptyMovableSlot] == null)
-                        break;
-                }
-
-                break;
-            }
-        }
-    }
-
-    public void RemoveAtom(DreamObjectAtom atom) {
-        AtomCount--;
-
-        int index;
-        switch (atom) {
-            case DreamObjectArea area:
-                index = _areas.IndexOf(area);
-                if (index == -1)
-                    return;
-
-                _nextEmptyAreaSlot = Math.Min(_nextEmptyAreaSlot, index);
-                _areas[index] = null;
-                break;
-            case DreamObjectTurf turf:
-                index = _turfs.IndexOf(turf);
-                if (index == -1)
-                    return;
-
-                _nextEmptyTurfSlot = Math.Min(_nextEmptyTurfSlot, index);
-                _turfs[index] = null;
-                break;
-            case DreamObjectMob mob:
-                index = _mobs.IndexOf(mob);
-                if (index == -1)
-                    return;
-
-                _nextEmptyMobSlot = Math.Min(_nextEmptyMobSlot, index);
-                _mobs[index] = null;
-                break;
-            case DreamObjectMovable movable:
-                index = _movables.IndexOf(movable);
-                if (index == -1)
-                    return;
-
-                _nextEmptyMovableSlot = Math.Min(_nextEmptyMovableSlot, index);
-                _movables[index] = null;
-                break;
         }
     }
 
@@ -265,6 +155,10 @@ public sealed class AtomManager {
             case "maptext_height":
             case "maptext_x":
             case "maptext_y":
+            case "mouse_drag_pointer":
+            case "mouse_drop_pointer":
+            case "mouse_drop_zone":
+            case "mouse_over_pointer":
                 return true;
 
             // Get/SetAppearanceVar doesn't handle filters right now
@@ -385,7 +279,7 @@ public sealed class AtomManager {
                 appearance.Verbs.Clear();
 
                 if (value.TryGetValueAsDreamList(out var valueList)) {
-                    foreach (DreamValue verbValue in valueList.GetValues()) {
+                    foreach (DreamValue verbValue in valueList.EnumerateValues()) {
                         if (!verbValue.TryGetValueAsProc(out var verb))
                             continue;
 
@@ -421,6 +315,18 @@ public sealed class AtomManager {
                 break;
             case "maptext_y":
                 value.TryGetValueAsInteger(out appearance.MaptextOffset.Y);
+                break;
+            case "mouse_drag_pointer":
+                value.TryGetValueAsInteger(out appearance.MouseDragPointer);
+                break;
+            case "mouse_drop_pointer":
+                value.TryGetValueAsInteger(out appearance.MouseDropPointer);
+                break;
+            case "mouse_drop_zone":
+                appearance.MouseDropZone = value.IsTruthy();
+                break;
+            case "mouse_over_pointer":
+                value.TryGetValueAsInteger(out appearance.MouseOverPointer);
                 break;
             case "appearance":
                 throw new Exception("Cannot assign the appearance var on an appearance");
@@ -530,6 +436,14 @@ public sealed class AtomManager {
                 return new(appearance.MaptextOffset.X);
             case "maptext_y":
                 return new(appearance.MaptextOffset.Y);
+            case "mouse_drag_pointer":
+                return new(appearance.MouseDragPointer);
+            case "mouse_drop_pointer":
+                return new(appearance.MouseDropPointer);
+            case "mouse_drop_zone":
+                return appearance.MouseDropZone ? DreamValue.True : DreamValue.False;
+            case "mouse_over_pointer":
+                return new(appearance.MouseOverPointer);
             case "appearance":
                 MutableAppearance appearanceCopy = appearance.ToMutable(); // Return a copy
                 return new(appearanceCopy);
@@ -541,7 +455,7 @@ public sealed class AtomManager {
                 var lays = varName == "overlays" ? appearance.Overlays : appearance.Underlays;
                 var list = _objectTree.CreateList(lays.Length);
 
-                if (_appearanceSystem != null) {
+                if (AppearanceSystem != null) {
                     foreach (var lay in lays) {
                         list.AddValue(new(lay.ToMutable()));
                     }
@@ -730,6 +644,10 @@ public sealed class AtomManager {
         def.TryGetVariable("maptext_height", out var maptextHeightVar);
         def.TryGetVariable("maptext_x", out var maptextXVar);
         def.TryGetVariable("maptext_y", out var maptextYVar);
+        def.TryGetVariable("mouse_over_pointer", out var mouseOverPointer);
+	    def.TryGetVariable("mouse_drag_pointer", out var mouseDragPointer);
+	    def.TryGetVariable("mouse_drop_pointer", out var mouseDropPointer);
+	    def.TryGetVariable("mouse_drop_zone", out var mouseDropZone);
 
         appearance = MutableAppearance.Get();
         SetAppearanceVar(appearance, "name", nameVar);
@@ -756,6 +674,10 @@ public sealed class AtomManager {
         SetAppearanceVar(appearance, "maptext_height", maptextHeightVar);
         SetAppearanceVar(appearance, "maptext_x", maptextXVar);
         SetAppearanceVar(appearance, "maptext_y", maptextYVar);
+        SetAppearanceVar(appearance, "mouse_over_pointer", mouseOverPointer);
+	    SetAppearanceVar(appearance, "mouse_drag_pointer", mouseDragPointer);
+	    SetAppearanceVar(appearance, "mouse_drop_pointer", mouseDropPointer);
+	    SetAppearanceVar(appearance, "mouse_drop_zone", mouseDropZone);
 
         if (def.TryGetVariable("transform", out var transformVar) && transformVar.TryGetValueAsDreamObject<DreamObjectMatrix>(out var transformMatrix)) {
             appearance.Transform = DreamObjectMatrix.MatrixToTransformFloatArray(transformMatrix);
@@ -763,7 +685,7 @@ public sealed class AtomManager {
 
         if (def.Verbs != null) {
             foreach (var verb in def.Verbs) {
-                var verbProc = _objectTree.Procs[verb];
+                var verbProc = _objectTree.Procs[verb.Value];
 
                 appearance.Verbs.Add(verbProc.VerbId!.Value);
             }

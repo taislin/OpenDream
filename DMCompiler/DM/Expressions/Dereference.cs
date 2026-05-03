@@ -90,13 +90,18 @@ internal class Dereference : LValue {
         return type;
     }
 
-    private void ShortCircuitHandler(DMProc proc, string endLabel, ShortCircuitMode shortCircuitMode) {
+    private void ShortCircuitHandler(ExpressionContext ctx, string endLabel, ShortCircuitMode shortCircuitMode) {
+        if (string.IsNullOrWhiteSpace(endLabel)) {
+            ctx.Compiler.Emit(WarningCode.BadExpression, Location, "Invalid short circuit attempt");
+            return;
+        }
+
         switch (shortCircuitMode) {
             case ShortCircuitMode.PopNull:
-                proc.JumpIfNull(endLabel);
+                ctx.Proc.JumpIfNull(endLabel);
                 break;
             case ShortCircuitMode.KeepNull:
-                proc.JumpIfNullNoPop(endLabel);
+                ctx.Proc.JumpIfNullNoPop(endLabel);
                 break;
             default:
                 throw new InvalidOperationException();
@@ -105,7 +110,7 @@ internal class Dereference : LValue {
 
     private void EmitOperation(ExpressionContext ctx, Operation operation, string endLabel, ShortCircuitMode shortCircuitMode) {
         if (operation.Safe) {
-            ShortCircuitHandler(ctx.Proc, endLabel, shortCircuitMode);
+            ShortCircuitHandler(ctx, endLabel, shortCircuitMode);
         }
 
         switch (operation) {
@@ -164,7 +169,7 @@ internal class Dereference : LValue {
         switch (operation) {
             case FieldOperation fieldOperation:
                 if (fieldOperation.Safe) {
-                    ShortCircuitHandler(ctx.Proc, endLabel, shortCircuitMode);
+                    ShortCircuitHandler(ctx, endLabel, shortCircuitMode);
                 }
 
                 return DMReference.CreateField(fieldOperation.Identifier);
@@ -177,7 +182,7 @@ internal class Dereference : LValue {
                 }
 
                 if (indexOperation.Safe) {
-                    ShortCircuitHandler(ctx.Proc, endLabel, shortCircuitMode);
+                    ShortCircuitHandler(ctx, endLabel, shortCircuitMode);
                 }
 
                 indexOperation.Index.EmitPushValue(ctx);
@@ -241,7 +246,7 @@ internal class Dereference : LValue {
         ctx.Proc.AddLabel(endLabel);
     }
 
-    public void EmitPushIsSaved(ExpressionContext ctx) {
+    public override void EmitPushIsSaved(ExpressionContext ctx) {
         string endLabel = ctx.Proc.NewLabelName();
 
         if (_expression is LValue exprLValue) {
@@ -303,8 +308,9 @@ internal class Dereference : LValue {
 
         if (operation is FieldOperation fieldOperation && prevPath is not null && compiler.DMObjectTree.TryGetDMObject(prevPath.Value, out var obj)) {
             var variable = obj.GetVariable(fieldOperation.Identifier);
-            if (variable is { CanConstFold: true })
-                return variable.Value.TryAsConstant(compiler, out constant);
+
+            if (variable != null)
+                return variable.TryAsConstant(compiler, out constant);
         }
 
         constant = null;
@@ -329,6 +335,10 @@ internal sealed class ScopeReference(DMObjectTree objectTree, Location location,
     public override string GetNameof(ExpressionContext ctx) => dmVar.Name;
 
     public override bool TryAsConstant(DMCompiler compiler, [NotNullWhen(true)] out Constant? constant) {
+        if (expression is Field && dmVar.TryAsConstant(compiler, out constant)) {
+            return true;
+        }
+
         if (expression is not IConstantPath) {
             constant = null;
             return false;

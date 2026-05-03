@@ -16,6 +16,7 @@ public sealed class DreamObjectDefinition {
     // IoC dependencies & entity systems for DreamObjects to use
     // TODO: Wow, remove this
     public readonly DreamManager DreamManager;
+    public readonly DreamRefManager DreamRefManager;
     public readonly DreamObjectTree ObjectTree;
     public readonly AtomManager AtomManager;
     public readonly IDreamMapManager DreamMapManager;
@@ -23,13 +24,13 @@ public sealed class DreamObjectDefinition {
     public readonly DreamResourceManager DreamResourceManager;
     public readonly WalkManager WalkManager;
     public readonly IEntityManager EntityManager;
-    public readonly IPlayerManager PlayerManager;
     public readonly ISerializationManager SerializationManager;
     public readonly ServerAppearanceSystem? AppearanceSystem;
     public readonly TransformSystem? TransformSystem;
     public readonly PvsOverrideSystem? PvsOverrideSystem;
     public readonly MetaDataSystem? MetaDataSystem;
     public readonly ServerVerbSystem? VerbSystem;
+    public readonly ServerDreamParticlesSystem? ParticlesSystem;
 
     public readonly TreeEntry TreeEntry;
     public string Type => TreeEntry.Path;
@@ -47,7 +48,7 @@ public sealed class DreamObjectDefinition {
     private bool? _noConstructors = null;
     public readonly Dictionary<string, int> Procs = new();
     public readonly Dictionary<string, int> OverridingProcs = new();
-    public List<int>? Verbs;
+    public Dictionary<string, int>? Verbs;
 
     // Maps variables from their name to their initial value.
     public readonly Dictionary<string, DreamValue> Variables = new();
@@ -60,6 +61,7 @@ public sealed class DreamObjectDefinition {
 
     public DreamObjectDefinition(DreamObjectDefinition copyFrom) {
         DreamManager = copyFrom.DreamManager;
+        DreamRefManager = copyFrom.DreamRefManager;
         ObjectTree = copyFrom.ObjectTree;
         AtomManager = copyFrom.AtomManager;
         DreamMapManager = copyFrom.DreamMapManager;
@@ -67,13 +69,13 @@ public sealed class DreamObjectDefinition {
         DreamResourceManager = copyFrom.DreamResourceManager;
         WalkManager = copyFrom.WalkManager;
         EntityManager = copyFrom.EntityManager;
-        PlayerManager = copyFrom.PlayerManager;
         SerializationManager = copyFrom.SerializationManager;
         AppearanceSystem = copyFrom.AppearanceSystem;
         TransformSystem = copyFrom.TransformSystem;
         PvsOverrideSystem = copyFrom.PvsOverrideSystem;
         MetaDataSystem = copyFrom.MetaDataSystem;
         VerbSystem = copyFrom.VerbSystem;
+        ParticlesSystem = copyFrom.ParticlesSystem;
 
         TreeEntry = copyFrom.TreeEntry;
         InitializationProc = copyFrom.InitializationProc;
@@ -85,11 +87,12 @@ public sealed class DreamObjectDefinition {
         Procs = new Dictionary<string, int>(copyFrom.Procs);
         OverridingProcs = new Dictionary<string, int>(copyFrom.OverridingProcs);
         if (copyFrom.Verbs != null)
-            Verbs = new List<int>(copyFrom.Verbs);
+            Verbs = new Dictionary<string, int>(copyFrom.Verbs);
     }
 
-    public DreamObjectDefinition(DreamManager dreamManager, DreamObjectTree objectTree, AtomManager atomManager, IDreamMapManager dreamMapManager, IMapManager mapManager, DreamResourceManager dreamResourceManager, WalkManager walkManager, IEntityManager entityManager, IPlayerManager playerManager, ISerializationManager serializationManager, ServerAppearanceSystem? appearanceSystem, TransformSystem? transformSystem, PvsOverrideSystem? pvsOverrideSystem, MetaDataSystem? metaDataSystem, ServerVerbSystem? verbSystem, TreeEntry? treeEntry) {
+    public DreamObjectDefinition(DreamManager dreamManager, DreamRefManager dreamRefManager, DreamObjectTree objectTree, AtomManager atomManager, IDreamMapManager dreamMapManager, IMapManager mapManager, DreamResourceManager dreamResourceManager, WalkManager walkManager, IEntityManager entityManager, ISerializationManager serializationManager, ServerAppearanceSystem? appearanceSystem, TransformSystem? transformSystem, PvsOverrideSystem? pvsOverrideSystem, MetaDataSystem? metaDataSystem, ServerVerbSystem? verbSystem, ServerDreamParticlesSystem? particlesSystem, TreeEntry? treeEntry) {
         DreamManager = dreamManager;
+        DreamRefManager = dreamRefManager;
         ObjectTree = objectTree;
         AtomManager = atomManager;
         DreamMapManager = dreamMapManager;
@@ -97,13 +100,13 @@ public sealed class DreamObjectDefinition {
         DreamResourceManager = dreamResourceManager;
         WalkManager = walkManager;
         EntityManager = entityManager;
-        PlayerManager = playerManager;
         SerializationManager = serializationManager;
         AppearanceSystem = appearanceSystem;
         TransformSystem = transformSystem;
         PvsOverrideSystem = pvsOverrideSystem;
         MetaDataSystem = metaDataSystem;
         VerbSystem = verbSystem;
+        ParticlesSystem = particlesSystem;
 
         TreeEntry = treeEntry;
 
@@ -111,7 +114,7 @@ public sealed class DreamObjectDefinition {
             InitializationProc = Parent.InitializationProc;
             Variables = new Dictionary<string, DreamValue>(Parent.Variables);
             if (Parent.Verbs != null)
-                Verbs = new List<int>(Parent.Verbs);
+                Verbs = new Dictionary<string, int>(Parent.Verbs);
             if (Parent != ObjectTree.Root.ObjectDefinition) // Don't include root-level globals
                 GlobalVariables = new Dictionary<string, int>(Parent.GlobalVariables);
             if (Parent.ConstVariables != null)

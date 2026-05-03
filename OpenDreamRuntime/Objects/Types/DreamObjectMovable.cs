@@ -20,6 +20,7 @@ public class DreamObjectMovable : DreamObjectAtom {
     private readonly TransformComponent _transformComponent;
     private readonly MovableContentsList _contents;
     private string? _screenLoc;
+    private DreamObjectParticles? _particles;
 
     private string? ScreenLoc {
         get => _screenLoc;
@@ -58,6 +59,8 @@ public class DreamObjectMovable : DreamObjectAtom {
         }
 
         WalkManager.StopWalks(this);
+        _particles?.Delete();
+        _particles = null;
         AtomManager.DeleteMovableEntity(this);
 
         base.HandleDeletion(possiblyThreaded);
@@ -79,7 +82,7 @@ public class DreamObjectMovable : DreamObjectAtom {
                 return true;
             case "bound_width":
             case "bound_height":
-                value = new(32); // TODO: Custom bounds support
+                value = new(DreamManager.WorldInstance.IconSize); // TODO: Custom bounds support
                 return true;
             case "screen_loc":
                 value = (ScreenLoc != null) ? new(ScreenLoc) : DreamValue.Null;
@@ -93,6 +96,9 @@ public class DreamObjectMovable : DreamObjectAtom {
                 locs.AddValue(new(Loc));
 
                 value = new DreamValue(locs);
+                return true;
+            case "particles":
+                value = new(_particles);
                 return true;
             default:
                 return base.TryGetVar(varName, out value);
@@ -137,6 +143,20 @@ public class DreamObjectMovable : DreamObjectAtom {
                 value.TryGetValueAsString(out var screenLoc);
 
                 ScreenLoc = screenLoc;
+                break;
+            case "particles":
+                if (value.TryGetValueAsDreamObject<DreamObjectParticles>(out var particles)) {
+                    if (_particles == particles)
+                        break;
+
+                    _particles?.Owner = null;
+                    _particles = particles;
+                    _particles.Owner = this;
+                } else {
+                    _particles?.Owner = null;
+                    _particles = null;
+                }
+
                 break;
             default:
                 base.SetVar(varName, value);

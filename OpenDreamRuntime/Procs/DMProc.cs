@@ -24,16 +24,17 @@ public sealed class DMProc : DreamProc {
 
     public readonly AtomManager AtomManager;
     public readonly DreamManager DreamManager;
+    public readonly DreamRefManager RefManager;
     public readonly ProcScheduler ProcScheduler;
     public readonly IDreamMapManager DreamMapManager;
     public readonly IDreamDebugManager DreamDebugManager;
     public readonly DreamResourceManager DreamResourceManager;
     public readonly DreamObjectTree ObjectTree;
-    public readonly ServerVerbSystem VerbSystem;
+    public readonly ServerVerbSystem? VerbSystem;
 
     private readonly int _maxStackSize;
 
-    public DMProc(int id, TreeEntry owningType, ProcDefinitionJson json, string? name, DreamManager dreamManager, AtomManager atomManager, IDreamMapManager dreamMapManager, IDreamDebugManager dreamDebugManager, DreamResourceManager dreamResourceManager, DreamObjectTree objectTree, ProcScheduler procScheduler, ServerVerbSystem verbSystem)
+    public DMProc(int id, TreeEntry owningType, ProcDefinitionJson json, string? name, DreamManager dreamManager, DreamRefManager refManager, AtomManager atomManager, IDreamMapManager dreamMapManager, IDreamDebugManager dreamDebugManager, DreamResourceManager dreamResourceManager, DreamObjectTree objectTree, ProcScheduler procScheduler, ServerVerbSystem? verbSystem)
         : base(id, owningType, name ?? json.Name, null, json.Attributes, GetArgumentNames(json), GetArgumentTypes(json), json.VerbSrc, json.VerbName, json.VerbCategory, json.VerbDesc, json.Invisibility, json.IsVerb) {
         Bytecode = json.Bytecode ?? [];
         LocalNames = json.Locals ?? [];
@@ -43,6 +44,7 @@ public sealed class DMProc : DreamProc {
 
         AtomManager = atomManager;
         DreamManager = dreamManager;
+        RefManager = refManager;
         ProcScheduler = procScheduler;
         DreamMapManager = dreamMapManager;
         DreamDebugManager = dreamDebugManager;
@@ -52,6 +54,8 @@ public sealed class DMProc : DreamProc {
     }
 
     public (string Source, int Line) GetSourceAtOffset(int offset) {
+        if(SourceInfo.Count == 0)
+            return ("<No Source Attached>",0);
         SourceInfoJson current = SourceInfo[0];
         string source = ObjectTree.Strings[current.File!.Value];
 
@@ -153,6 +157,10 @@ public sealed class NullProcState : ProcState {
 
     public override DreamProc? Proc => _proc;
 
+    #if TOOLS
+    public override (string SourceFile, int Line) TracyLocationId => ("<NO-OP>",0);
+    #endif
+
     private DreamProc? _proc;
 
     public override ProcStatus Resume() {
@@ -172,6 +180,14 @@ public sealed class NullProcState : ProcState {
         _proc = null;
         Pool.Push(this);
     }
+
+    public override ReadOnlySpan<DreamValue> GetArguments() {
+        throw new InvalidOperationException();
+    }
+
+    public override void SetArgument(int id, DreamValue value) {
+        throw new InvalidOperationException();
+    }
 }
 
 public sealed class DMProcState : ProcState {
@@ -180,6 +196,8 @@ public sealed class DMProcState : ProcState {
     public static readonly Stack<DMProcState> Pool = new();
 
     private static readonly ArrayPool<DreamValue> DreamValuePool = ArrayPool<DreamValue>.Create();
+
+    private const int NoTryCatchVar = -1;
 
     #region Opcode Handlers
 
@@ -196,6 +214,7 @@ public sealed class DMProcState : ProcState {
         {DreamProcOpcode.Call, DMOpcodeHandlers.Call},
         {DreamProcOpcode.MultiplyReference, DMOpcodeHandlers.MultiplyReference},
         {DreamProcOpcode.JumpIfFalse, DMOpcodeHandlers.JumpIfFalse},
+        {DreamProcOpcode.CreateStrictAssociativeList, DMOpcodeHandlers.CreateStrictAssociativeList},
         {DreamProcOpcode.Jump, DMOpcodeHandlers.Jump},
         {DreamProcOpcode.CompareEquals, DMOpcodeHandlers.CompareEquals},
         {DreamProcOpcode.Return, DMOpcodeHandlers.Return},
@@ -238,6 +257,8 @@ public sealed class DMProcState : ProcState {
         {DreamProcOpcode.Error, DMOpcodeHandlers.Error},
         {DreamProcOpcode.IsInList, DMOpcodeHandlers.IsInList},
         {DreamProcOpcode.PushFloat, DMOpcodeHandlers.PushFloat},
+        {DreamProcOpcode.PushFloatAssign, DMOpcodeHandlers.PushFloatAssign},
+        {DreamProcOpcode.NPushFloatAssign, DMOpcodeHandlers.NPushFloatAssign},
         {DreamProcOpcode.ModulusReference, DMOpcodeHandlers.ModulusReference},
         {DreamProcOpcode.CreateListEnumerator, DMOpcodeHandlers.CreateListEnumerator},
         {DreamProcOpcode.Enumerate, DMOpcodeHandlers.Enumerate},
@@ -310,6 +331,7 @@ public sealed class DMProcState : ProcState {
         {DreamProcOpcode.GetDir, DMOpcodeHandlers.GetDir},
         {DreamProcOpcode.DebuggerBreakpoint, DMOpcodeHandlers.DebuggerBreakpoint},
         {DreamProcOpcode.Rgb, DMOpcodeHandlers.Rgb},
+        {DreamProcOpcode.Animate, DMOpcodeHandlers.Animate},
         // Peephole optimizer opcode handlers
         {DreamProcOpcode.NullRef, DMOpcodeHandlers.NullRef},
         {DreamProcOpcode.AssignNoPush, DMOpcodeHandlers.AssignNoPush},
@@ -340,26 +362,23 @@ public sealed class DMProcState : ProcState {
     public ProcScheduler ProcScheduler => _proc.ProcScheduler;
     public IDreamDebugManager DebugManager => _proc.DreamDebugManager;
 
-    /// <summary> This stores our 'src' value. May be null!</summary>
-    public DreamObject? Instance;
-
-    public DreamObject? Usr;
-    public int ArgumentCount;
-    private readonly Stack<int> _catchPosition = new();
-    private readonly Stack<int> _catchVarIndex = new();
-    private const int NoTryCatchVar = -1;
     public readonly IDreamValueEnumerator?[] Enumerators = new IDreamValueEnumerator?[16];
 
     public int ProgramCounter => _pc;
-    private int _pc;
+    public override DMProc Proc => _proc;
 
-    private bool _firstResume = true;
-
-    // Contains both arguments (at index 0) and local vars (at index ArgumentCount)
-    private DreamValue[] _localVariables = default!;
+#if TOOLS
+    public override (string SourceFile, int Line) TracyLocationId => _proc.GetSourceAtOffset(_pc+1);
+#endif
 
     private DMProc _proc = default!;
-    public override DMProc Proc => _proc;
+    private bool _firstResume = true;
+    private int _pc;
+    private readonly Stack<int> _catchPosition = new();
+    private readonly Stack<int> _catchVarIndex = new();
+
+    /// Contains both arguments (at index 0) and local vars (at index ArgumentCount)
+    private DreamValue[] _localVariables = default!;
 
     /// Static initializer for maintainer friendly OpcodeHandlers to performance friendly _opcodeHandlers
     static unsafe DMProcState() {
@@ -487,8 +506,11 @@ public sealed class DMProcState : ProcState {
 
     public ProcStatus Call(DreamProc proc, DreamObject? src, DreamProcArguments arguments) {
         if (proc is NativeProc p) {
-            // Skip a whole song and dance.
-            Push(p.Call(Thread, src, Usr, arguments));
+            // ReSharper disable ExplicitCallerInfoArgument
+            using(Profiler.BeginZone(filePath:"Native Proc", lineNumber:0, memberName:p.Name))
+                // Skip a whole song and dance.
+                Push(p.Call(Thread, src, Usr, arguments));
+            // ReSharper restore ExplicitCallerInfoArgument
             return ProcStatus.Continue;
         }
 
@@ -564,11 +586,11 @@ public sealed class DMProcState : ProcState {
         Pool.Push(this);
     }
 
-    public ReadOnlySpan<DreamValue> GetArguments() {
+    public override ReadOnlySpan<DreamValue> GetArguments() {
         return _localVariables.AsSpan(0, ArgumentCount);
     }
 
-    public void SetArgument(int id, DreamValue value) {
+    public override void SetArgument(int id, DreamValue value) {
         if (id < 0 || id >= ArgumentCount)
             throw new IndexOutOfRangeException($"Given argument id ({id}) was out of range");
 
@@ -676,6 +698,8 @@ public sealed class DMProcState : ProcState {
             case DMReference.Type.World:
             case DMReference.Type.SuperProc:
             case DMReference.Type.ListIndex:
+            case DMReference.Type.Callee:
+            case DMReference.Type.Caller:
                 return new DreamReference(refType, 0);
             case DMReference.Type.Argument:
             case DMReference.Type.Local:
@@ -731,6 +755,7 @@ public sealed class DMProcState : ProcState {
 
     public void AssignReference(DreamReference reference, DreamValue value, bool peek = false) {
         switch (reference.Type) {
+            case DMReference.Type.NoRef: break;
             case DMReference.Type.Self: Result = value; break;
             case DMReference.Type.Argument: SetArgument(reference.Value, value); break;
             case DMReference.Type.Local: _localVariables[ArgumentCount + reference.Value] = value; break;
@@ -761,7 +786,9 @@ public sealed class DMProcState : ProcState {
             case DMReference.Type.ListIndex: {
                 GetIndexReferenceValues(reference, out var index, out var indexing, peek);
 
-                if (indexing.TryGetValueAsDreamObject(out var dreamObject) && dreamObject != null) {
+                if (indexing.TryGetValueAsIDreamList(out var dreamList)) {
+                    dreamList.SetValue(index, value);
+                } else if (indexing.TryGetValueAsDreamObject<DreamObject>(out var dreamObject)) {
                     dreamObject.OperatorIndexAssign(index, this, value);
                 } else {
                     ThrowCannotAssignListIndex(index, indexing);
@@ -802,6 +829,7 @@ public sealed class DMProcState : ProcState {
 
     public DreamValue GetReferenceValue(DreamReference reference, bool peek = false) {
         switch (reference.Type) {
+            case DMReference.Type.NoRef: return DreamValue.Null;
             case DMReference.Type.Src: return new(Instance);
             case DMReference.Type.Usr: return new(Usr);
             case DMReference.Type.Self: return Result;
@@ -810,6 +838,18 @@ public sealed class DMProcState : ProcState {
             case DMReference.Type.Local: return _localVariables[ArgumentCount + reference.Value];
             case DMReference.Type.Args: return new(new ProcArgsList(Proc.ObjectTree.List.ObjectDefinition, this));
             case DMReference.Type.World: return new(DreamManager.WorldInstance);
+            case DMReference.Type.Callee: {
+                // TODO: BYOND seems to reuse the same object. At least, callee == callee
+                var callee = Proc.ObjectTree.CreateObject<DreamObjectCallee>(Proc.ObjectTree.Callee);
+
+                callee.ProcState = this;
+                callee.ProcStateId = Id;
+                return new(callee);
+            }
+            case DMReference.Type.Caller: {
+                // TODO
+                return DreamValue.Null;
+            }
             case DMReference.Type.Field: {
                 DreamValue owner = peek ? Peek() : Pop();
 
@@ -861,6 +901,8 @@ public sealed class DMProcState : ProcState {
             case DMReference.Type.Local:
             case DMReference.Type.Args:
             case DMReference.Type.SrcField:
+            case DMReference.Type.Callee:
+            case DMReference.Type.Caller:
                 return;
             case DMReference.Type.ListIndex:
                 PopDrop();
@@ -870,7 +912,8 @@ public sealed class DMProcState : ProcState {
             case DMReference.Type.Field:
                 PopDrop();
                 return;
-            default: ThrowPopInvalidType(reference.Type);
+            default:
+                ThrowPopInvalidType(reference.Type);
                 return;
         }
     }
@@ -1039,7 +1082,7 @@ public sealed class DMProcState : ProcState {
                         string argumentName = key.MustGetValueAsString();
                         int argumentIndex = proc.ArgumentNames.IndexOf(argumentName);
                         if (argumentIndex == -1)
-                            throw new Exception($"{proc} has no argument named {argumentName}");
+                            throw new Exception($"{proc} has no argument named \"{argumentName}\"");
 
                         arguments[argumentIndex] = value;
                     }
@@ -1073,7 +1116,7 @@ public sealed class DMProcState : ProcState {
 
                         int argumentIndex = proc.ArgumentNames.IndexOf(argumentName);
                         if (argumentIndex == -1)
-                            throw new Exception($"{proc} has no argument named {argumentName}");
+                            throw new Exception($"{proc} has no argument named \"{argumentName}\"");
 
                         arguments[argumentIndex] = argList.GetValue(value);
                     } else { //Ordered argument

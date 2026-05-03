@@ -1,4 +1,4 @@
-﻿using OpenDreamClient.Interface.Descriptors;
+﻿using OpenDreamShared.Interface.Descriptors;
 using Robust.Client.Input;
 using Robust.Client.UserInterface;
 using Robust.Shared.Input;
@@ -146,6 +146,9 @@ internal struct ParsedKeybind {
         {"SUBTRACT", Keyboard.Key.NumpadSubtract},
         {"DIVIDE", Keyboard.Key.NumpadDivide},
         {";", Keyboard.Key.SemiColon}, // undocumented but works in BYOND
+        {",", Keyboard.Key.Comma},
+        {".", Keyboard.Key.Period},
+        {"`", Keyboard.Key.Tilde},
         //TODO: Right shift/ctrl/alt
         {"SHIFT", Keyboard.Key.Shift},
         {"CTRL", Keyboard.Key.Control},
@@ -313,20 +316,12 @@ public sealed class InterfaceMacro : InterfaceElement {
             return;
         if (_isRelease)
             return;
-
-
-        if (_isRepeating) {
-            _interfaceManager.StartRepeatingCommand(Command);
-        } else {
-            _interfaceManager.RunCommand(Command);
-        }
-
+        _interfaceManager.RunCommand(Command, _isRepeating);
     }
 
     private void OnMacroRelease(ICommonSession? session) {
         if (string.IsNullOrEmpty(Command))
             return;
-
 
         if (_isRepeating) {
             _interfaceManager.StopRepeatingCommand(Command);

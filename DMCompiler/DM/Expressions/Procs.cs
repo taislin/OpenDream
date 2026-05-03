@@ -64,6 +64,11 @@ internal sealed class ProcSelf(Location location, DMComplexValueType valType) : 
         ShortCircuitMode shortCircuitMode = ShortCircuitMode.KeepNull) {
         return DMReference.Self;
     }
+
+    public override void EmitPushInitial(ExpressionContext ctx) {
+        ctx.Compiler.Emit(WarningCode.PointlessBuiltinCall, Location, "calling initial() on `.` returns the current value");
+        EmitPushValue(ctx);
+    }
 }
 
 // ..
@@ -108,9 +113,7 @@ internal sealed class ProcCall(Location location, DMExpression target, ArgumentL
     public override void EmitPushValue(ExpressionContext ctx) {
         (DMObject? procOwner, DMProc? targetProc) = GetTargetProc(ctx.Compiler, ctx.Type);
         DoCompileTimeLinting(ctx.Compiler, procOwner, targetProc);
-        if ((targetProc?.Attributes & ProcAttributes.Unimplemented) == ProcAttributes.Unimplemented) {
-            ctx.Compiler.UnimplementedWarning(Location, $"{procOwner?.Path.ToString() ?? "/"}.{targetProc.Name}() is not implemented");
-        }
+        targetProc?.EmitUsageWarnings(Location);
 
         string endLabel = ctx.Proc.NewLabelName();
 

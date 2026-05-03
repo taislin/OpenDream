@@ -284,8 +284,45 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
                     break;
                 }
 
-                result = new NewPath(Compiler, newPath.Location, path,
+                result = new NewPath(Compiler, newPath.Location, path, null,
                     BuildArgumentList(newPath.Location, newPath.Parameters, inferredPath));
+                break;
+            case DMASTNewModifiedType newModifiedType:
+                if (!ObjectTree.TryGetDMObject(newModifiedType.Type.Value.Path, out var owner)) {
+                    return UnknownReference(newModifiedType.Type.Location, $"Type {newModifiedType.Type.Value.Path} does not exist");
+                }
+
+                var typePath = new ConstantTypeReference(newModifiedType.Type.Location, owner);
+
+                if (newModifiedType.Type.VarOverrides is null) {
+                    result = new NewPath(Compiler, newModifiedType.Location, typePath, null,
+                        BuildArgumentList(newModifiedType.Location, newModifiedType.Parameters, inferredPath));
+                    break;
+                }
+
+                var failed = false;
+                var overrides = new Dictionary<string, object?>();
+                foreach (var varOverride in newModifiedType.Type.VarOverrides) {
+                    if (!owner.HasLocalVariable(varOverride.Key)) {
+                        return UnknownIdentifier(newModifiedType.Type.Location, varOverride.Key);
+                    }
+
+                    var jsonExpression = BuildExpression(varOverride.Value, inferredPath);
+                    if (!jsonExpression.TryAsJsonRepresentation(Compiler, out var jsonValue)) {
+                        failed = true;
+                        break;
+                    }
+
+                    overrides[varOverride.Key] = jsonValue;
+                }
+
+                if (failed) {
+                    result = BadExpression(WarningCode.BadExpression, newModifiedType.Type.Location, "Expected a constant expression");
+                    break;
+                }
+
+                result = new NewPath(Compiler, newModifiedType.Location, typePath, overrides,
+                    BuildArgumentList(newModifiedType.Location, newModifiedType.Parameters, inferredPath));
                 break;
             case DMASTNewExpr newExpr:
                 result = new New(Compiler, newExpr.Location,
@@ -305,7 +342,7 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
                     break;
                 }
 
-                result = new NewPath(Compiler, newInferred.Location, inferredType,
+                result = new NewPath(Compiler, newInferred.Location, inferredType, null,
                     BuildArgumentList(newInferred.Location, newInferred.Parameters, inferredPath));
                 break;
             case DMASTPreIncrement preIncrement:
@@ -332,6 +369,9 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
                 break;
             case DMASTRgb rgb:
                 result = new Rgb(rgb.Location, BuildArgumentList(rgb.Location, rgb.Parameters, inferredPath));
+                break;
+            case DMASTAnimate animate:
+                result = new Animate(animate.Location, BuildArgumentList(animate.Location, animate.Parameters, inferredPath));
                 break;
             case DMASTLocateCoordinates locateCoordinates:
                 result = new LocateCoordinates(locateCoordinates.Location,
@@ -456,6 +496,11 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
             case DMASTConstantString constString: return new String(constant.Location, constString.Value);
             case DMASTConstantResource constResource: return new Resource(Compiler, constant.Location, constResource.Path);
             case DMASTConstantPath constPath: return BuildPath(constant.Location, constPath.Value.Path);
+            case DMASTModifiedType constModifiedPath:
+                Compiler.UnimplementedWarning(constant.Location,
+                    "Using modified types in this way is unimplemented, and will just point to the original type");
+
+                return BuildPath(constant.Location, constModifiedPath.Value.Path);
             case DMASTUpwardPathSearch upwardSearch:
                 BuildExpression(upwardSearch.Path).TryAsConstant(Compiler, out var pathExpr);
                 if (pathExpr is not IConstantPath expr)
@@ -550,6 +595,31 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
 
     private DMExpression BuildIdentifier(DMASTIdentifier identifier, DreamPath? inferredPath = null) {
         var name = identifier.Identifier;
+        if (scopeMode == Normal) {
+            // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract
+            var localVar = ctx.Proc?.GetLocalVariable(name);
+            if (localVar is not null) {
+                return new Local(identifier.Location, localVar);
+            }
+        }
+
+        var field = ctx.Type.GetVariable(name);
+        if (field != null && (scopeMode == Normal || field.IsConst)) {
+            return new Field(identifier.Location, field, field.ValType);
+        }
+
+        var globalId = ctx.Proc?.GetGlobalVariableId(name) ?? ctx.Type.GetGlobalVariableId(name);
+
+        if (globalId != null) {
+            if (field is not null)
+                Compiler.Emit(WarningCode.AmbiguousVarStatic, identifier.Location, $"Static var definition cannot reference instance variable \"{name}\" but a global exists");
+
+            var globalVar = ObjectTree.Globals[globalId.Value];
+            var global = new GlobalField(identifier.Location, globalVar.Type, globalId.Value, globalVar.ValType);
+            //soft reserved keywords DO NOT override globals
+            if (name is not ("usr" or "src" or "args" or "world" or "global" or "callee" or "caller"))
+                return global;
+        }
 
         switch (name) {
             case "src":
@@ -558,6 +628,10 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
                 return new Usr(identifier.Location);
             case "args":
                 return new Args(identifier.Location);
+            case "callee":
+                return new Callee(identifier.Location);
+            case "caller":
+                return new Caller(identifier.Location);
             case "world":
                 if (scopeMode == FirstPassStatic) // world is not available on the first pass
                     return UnknownIdentifier(identifier.Location, "world");
@@ -578,28 +652,6 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
             case "global":
                 return new Global(identifier.Location);
             default: {
-                if (scopeMode == Normal) {
-                    var localVar = ctx.Proc?.GetLocalVariable(name);
-                    if (localVar != null)
-                        return new Local(identifier.Location, localVar);
-                }
-
-                var field = ctx.Type.GetVariable(name);
-                if (field != null && (scopeMode == Normal || field.IsConst)) {
-                    return new Field(identifier.Location, field, field.ValType);
-                }
-
-                var globalId = ctx.Proc?.GetGlobalVariableId(name) ?? ctx.Type.GetGlobalVariableId(name);
-
-                if (globalId != null) {
-                    if (field is not null)
-                        Compiler.Emit(WarningCode.AmbiguousVarStatic, identifier.Location, $"Static var definition cannot reference instance variable \"{name}\" but a global exists");
-
-                    var globalVar = ObjectTree.Globals[globalId.Value];
-                    var global = new GlobalField(identifier.Location, globalVar.Type, globalId.Value, globalVar.ValType);
-                    return global;
-                }
-
                 return UnknownIdentifier(identifier.Location, name);
             }
         }
@@ -970,13 +1022,18 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
                                     $"{prevPath}.{field} is not implemented and will have unexpected behavior");
                             }
 
+                            if (property.ValType.IsUnsupported) {
+                                Compiler.UnsupportedWarning(deref.Location,
+                                    $"{prevPath}.{field} will not be supported");
+                            }
+
                             operations = new Dereference.Operation[newOperationCount];
                             astOperationOffset += i + 1;
                             i = -1;
                             prevPath = property.Type;
                             pathIsFuzzy = prevPath == null;
                             continue;
-                        } else if (property?.CanConstFold is true && property.Value.TryAsConstant(Compiler, out var derefConst)) {
+                        } else if (property?.TryAsConstant(Compiler, out var derefConst) is true) {
                             expr = derefConst;
 
                             var newOperationCount = operations.Length - i - 1;
@@ -987,6 +1044,11 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
                             if (property.ValType.IsUnimplemented) {
                                 Compiler.UnimplementedWarning(deref.Location,
                                     $"{prevPath}.{field} is not implemented and will have unexpected behavior");
+                            }
+
+                            if (property.ValType.IsUnsupported){
+                                Compiler.UnsupportedWarning(deref.Location,
+                                    $"{prevPath}.{field} will not be supported");
                             }
 
                             operations = new Dereference.Operation[newOperationCount];
@@ -1038,6 +1100,9 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
                             return UnknownReference(callOperation.Location, $"Type {prevPath.Value} does not exist");
                         if (!fromObject.HasProc(field))
                             return UnknownIdentifier(callOperation.Location, field);
+
+                        var procId = fromObject.GetProcs(field)![^1];
+                        ObjectTree.AllProcs[procId].EmitUsageWarnings(callOperation.Location);
                     }
 
                     operation = new Dereference.CallOperation {
@@ -1079,11 +1144,16 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
     private DMExpression BuildImplicitAsType(DMASTImplicitAsType asType, DreamPath? inferredPath) {
         var expr = BuildExpression(asType.Value, inferredPath);
 
-        if (inferredPath is null) {
+        // From the DM ref:
+        // 1. If astype() is on the right-hand side of an assignment operation, the left-hand side's var type is the implied type, just like with the new() operator.
+        // 2. Otherwise, the var type of the first argument is the implied type, just as it is in istype().
+        var inferredType = inferredPath ?? expr.Path;
+
+        if (inferredType is null) {
             return BadExpression(WarningCode.BadExpression, asType.Location, "Could not infer a type");
         }
 
-        return new AsTypeInferred(asType.Location, expr, inferredPath.Value);
+        return new AsTypeInferred(asType.Location, expr, inferredType.Value);
     }
 
     private DMExpression BuildImplicitIsType(DMASTImplicitIsType isType, DreamPath? inferredPath) {
@@ -1096,21 +1166,28 @@ internal class DMExpressionBuilder(ExpressionContext ctx, DMExpressionBuilder.Sc
     }
 
     private DMExpression BuildList(DMASTList list, DreamPath? inferredPath) {
-        (DMExpression? Key, DMExpression Value)[] values = [];
+        (DMExpression? Key, DMExpression Value)[] values = new (DMExpression?, DMExpression)[list.Values.Length];
 
-        if (list.Values != null) {
-            values = new (DMExpression?, DMExpression)[list.Values.Length];
+        for (int i = 0; i < list.Values.Length; i++) {
+            DMASTCallParameter value = list.Values[i];
+            DMExpression? key = null;
+            DMExpression listValue = BuildExpression(value.Value, inferredPath);
 
-            for (int i = 0; i < list.Values.Length; i++) {
-                DMASTCallParameter value = list.Values[i];
-                DMExpression? key = (value.Key != null) ? BuildExpression(value.Key, inferredPath) : null;
-                DMExpression listValue = BuildExpression(value.Value, inferredPath);
-
-                values[i] = (key, listValue);
+            if (value.Key != null) {
+                key = BuildExpression(value.Key, inferredPath);
+            } else if (list.IsAList) {
+                Compiler.Emit(WarningCode.BadArgument, value.Location, "Missing the key for an alist item");
+                key = new BadExpression(value.Location);
             }
+
+            values[i] = (key, listValue);
         }
 
-        return new List(list.Location, values);
+        if (list.IsAList) {
+            return new AList(list.Location, values!);
+        } else {
+            return new List(list.Location, values);
+        }
     }
 
     private DMExpression BuildDimensionalList(DMASTDimensionalList list, DreamPath? inferredPath) {

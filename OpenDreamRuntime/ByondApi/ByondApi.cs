@@ -1,27 +1,65 @@
-﻿using OpenDreamRuntime.Map;
+﻿using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using OpenDreamRuntime.Map;
 using OpenDreamRuntime.Objects;
 using Robust.Shared.Utility;
 
 namespace OpenDreamRuntime.ByondApi;
 
 public static partial class ByondApi {
+    private const int LastErrorMaxLength = 128;
+
     private static DreamManager? _dreamManager;
+    private static DreamRefManager? _refManager;
     private static AtomManager? _atomManager;
     private static IDreamMapManager? _dreamMapManager;
     private static DreamObjectTree? _objectTree;
 
-    public static void Initialize(DreamManager dreamManager, AtomManager atomManager, IDreamMapManager dreamMapManager, DreamObjectTree objectTree) {
+    private static readonly ConcurrentQueue<Action> ThreadSyncQueue = new();
+    private static int _mainThreadId;
+
+    /// <summary>
+    /// A failed ByondApi call will set this string. It can be retrieved with <see cref="Byond_LastError"/>.
+    /// </summary>
+    private static string _lastError = string.Empty;
+
+    private static IntPtr _lastErrorPtr = IntPtr.Zero;
+
+    public static void Initialize(DreamManager dreamManager, DreamRefManager dreamRefManager, AtomManager atomManager, IDreamMapManager dreamMapManager, DreamObjectTree objectTree) {
         DebugTools.Assert(_dreamManager is null or { IsShutDown: true });
 
         _dreamManager = dreamManager;
+        _refManager = dreamRefManager;
         _atomManager = atomManager;
         _dreamMapManager = dreamMapManager;
         _objectTree = objectTree;
 
+        _mainThreadId = Environment.CurrentManagedThreadId;
+        ThreadSyncQueue.Clear();
+
+        _lastErrorPtr = Marshal.AllocHGlobal(LastErrorMaxLength);
+
         InitTrampoline();
     }
 
+    public static void Shutdown() {
+        Marshal.FreeHGlobal(_lastErrorPtr);
+    }
+
+    public static void ExecuteThreadSyncs() {
+        while (ThreadSyncQueue.TryDequeue(out var task))
+            task.Invoke();
+    }
+
+    /// <summary>
+    /// Converts a CByondValue to a DreamValue
+    /// </summary>
+    /// <remarks>Must be run on the main thread</remarks>
     public static DreamValue ValueFromDreamApi(CByondValue value) {
+        DebugTools.AssertEqual(Environment.CurrentManagedThreadId, _mainThreadId);
+
         var cdata = value.data;
         var ctype = value.type;
 
@@ -54,8 +92,7 @@ public static partial class ByondApi {
             case ByondValueType.Appearance:
             case ByondValueType.World:
             case ByondValueType.Proc:
-                int refId = (int)cdata.@ref;
-                return _dreamManager!.RefIdToValue(refId);
+                return _refManager!.LocateRef(cdata.@ref);
         }
     }
 
@@ -75,57 +112,26 @@ public static partial class ByondApi {
             case DreamValue.DreamValueType.DreamType:
             case DreamValue.DreamValueType.Appearance:
             case DreamValue.DreamValueType.DreamProc:
-                var refid = _dreamManager!.CreateRefInt(value, out RefType refType);
-                ByondValueType type;
-                ByondValueData data = new ByondValueData { @ref = refid };
-
-                switch (refType) {
-                    default:
-                        throw new Exception($"Invalid reference type for type {refType}");
-                    case RefType.Null:
-                        type = ByondValueType.Null;
-                        break;
-                    case RefType.DreamObjectTurf:
-                        type = ByondValueType.Turf;
-                        break;
-                    case RefType.DreamObject:
-                        type = ByondValueType.Obj;
-                        break;
-                    case RefType.DreamObjectMob:
-                        type = ByondValueType.Mob;
-                        break;
-                    case RefType.DreamObjectArea:
-                        type = ByondValueType.Area;
-                        break;
-                    case RefType.DreamObjectClient:
-                        type = ByondValueType.Client;
-                        break;
-                    case RefType.DreamObjectImage:
-                        type = ByondValueType.Image;
-                        break;
-                    case RefType.DreamObjectList:
-                        type = ByondValueType.List;
-                        break;
-                    case RefType.DreamObjectDatum:
-                        type = ByondValueType.Datum;
-                        break;
-                    case RefType.String:
-                        type = ByondValueType.String;
-                        break;
-                    case RefType.DreamResource:
-                        type = ByondValueType.Resource;
-                        break;
-                    case RefType.DreamType:
-                        // just assume objtypepath for now?
-                        type = ByondValueType.ObjTypePath;
-                        break;
-                    case RefType.DreamAppearance:
-                        type = ByondValueType.Appearance;
-                        break;
-                    case RefType.Proc:
-                        type = ByondValueType.Proc;
-                        break;
-                }
+                var @ref = _refManager!.GetRef(value);
+                var refType = (RefType)(@ref & DreamRefManager.RefTypeMask);
+                var data = new ByondValueData { @ref = @ref };
+                var type = refType switch {
+                    RefType.Null => ByondValueType.Null,
+                    RefType.DreamObjectTurf => ByondValueType.Turf,
+                    RefType.DreamObjectMovable => ByondValueType.Obj,
+                    RefType.DreamObjectMob => ByondValueType.Mob,
+                    RefType.DreamObjectArea => ByondValueType.Area,
+                    RefType.DreamObjectClient => ByondValueType.Client,
+                    RefType.DreamObjectImage => ByondValueType.Image,
+                    RefType.DreamObjectList => ByondValueType.List,
+                    RefType.DreamObjectDatum => ByondValueType.Datum,
+                    RefType.String => ByondValueType.String,
+                    RefType.DreamResource => ByondValueType.Resource,
+                    RefType.DreamType => ByondValueType.ObjTypePath, // just assume objtypepath for now?
+                    RefType.DreamAppearance => ByondValueType.Appearance,
+                    RefType.Proc => ByondValueType.Proc,
+                    _ => throw new Exception($"Invalid reference type for type {refType}")
+                };
 
                 return new CByondValue {
                     data = data,
@@ -134,5 +140,36 @@ public static partial class ByondApi {
             default:
                 throw new ArgumentOutOfRangeException();
         }
+    }
+
+    /// <summary>
+    /// Helper method that sets <see cref="_lastError"/> and returns an error code (false)
+    /// </summary>
+    private static byte SetLastError(string lastError) {
+        _lastError = lastError;
+        return 0;
+    }
+
+    [SuppressMessage("Usage", "RA0004:Risk of deadlock from accessing Task<T>.Result")]
+    private static T RunOnMainThread<T>(Func<T> task) {
+        if (Environment.CurrentManagedThreadId == _mainThreadId)
+            return task.Invoke();
+
+        var tcs = new TaskCompletionSource<T>();
+
+        ThreadSyncQueue.Enqueue(() => {
+            tcs.SetResult(task.Invoke());
+        });
+
+        return tcs.Task.Result;
+    }
+
+    private static void RunOnMainThreadNonBlocking(Action task) {
+        if (Environment.CurrentManagedThreadId == _mainThreadId) {
+            task();
+            return;
+        }
+
+        ThreadSyncQueue.Enqueue(task);
     }
 }

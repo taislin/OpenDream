@@ -132,7 +132,7 @@ public sealed class DreamObjectImage : DreamObject {
                 // Otherwise it attempts to create an appearance and creates a new (normal) list with that appearance
                 if (ObjectDefinition.IsSubtypeOf(ObjectTree.MutableAppearance)) {
                     if (valueList != null) {
-                        _overlays = valueList.CreateCopy();
+                        _overlays = (DreamList)valueList.CreateCopy();
                     } else {
                         var overlay = DreamOverlaysList.CreateOverlayAppearance(AtomManager, value, AtomManager.MustGetAppearance(this).Icon);
                         if (overlay == null)
@@ -150,7 +150,7 @@ public sealed class DreamObjectImage : DreamObject {
 
                 if (valueList != null) {
                     // TODO: This should postpone UpdateAppearance until after everything is added
-                    foreach (DreamValue overlayValue in valueList.GetValues()) {
+                    foreach (DreamValue overlayValue in valueList.EnumerateValues()) {
                         _overlays.AddValue(overlayValue);
                     }
                 } else if (!value.IsNull) {
@@ -165,7 +165,7 @@ public sealed class DreamObjectImage : DreamObject {
                 // See the comment in the overlays setter for info on this
                 if (ObjectDefinition.IsSubtypeOf(ObjectTree.MutableAppearance)) {
                     if (valueList != null) {
-                        _underlays = valueList.CreateCopy();
+                        _underlays = (DreamList)valueList.CreateCopy();
                     } else {
                         var underlay = DreamOverlaysList.CreateOverlayAppearance(AtomManager, value, AtomManager.MustGetAppearance(this).Icon);
                         if (underlay == null)
@@ -183,7 +183,7 @@ public sealed class DreamObjectImage : DreamObject {
 
                 if (valueList != null) {
                     // TODO: This should postpone UpdateAppearance until after everything is added
-                    foreach (DreamValue underlayValue in valueList.GetValues()) {
+                    foreach (DreamValue underlayValue in valueList.EnumerateValues()) {
                         _underlays.AddValue(underlayValue);
                     }
                 } else if (!value.IsNull) {
@@ -197,12 +197,28 @@ public sealed class DreamObjectImage : DreamObject {
 
                 _filters.Cut();
 
+                // filters = list("type"=...) or list(filter(...), filter(...))
                 if (valueList != null) { // filters = list("type"=...)
-                    var filterObject = DreamObjectFilter.TryCreateFilter(ObjectTree, valueList);
-                    if (filterObject == null) // list() with invalid "type" is ignored
-                        break;
+                    if (valueList.GetValue(new("type")) != DreamValue.Null) { // It's a single filter
+                        var filterObject = DreamObjectFilter.TryCreateFilter(ObjectTree, valueList);
+                        if (filterObject == null) // list() with invalid "type" is ignored
+                            break;
 
-                    _filters.AddValue(new(filterObject));
+                        _filters.AddValue(new(filterObject));
+                    } else { // It's a list of filters
+                        foreach (var filter in valueList.EnumerateValues()) {
+                            if (!filter.TryGetValueAsDreamObject<DreamObjectFilter>(out var filterObject)) {
+                                if (!filter.TryGetValueAsDreamList(out var filterValues))
+                                    continue;
+
+                                filterObject = DreamObjectFilter.TryCreateFilter(ObjectTree, filterValues);
+                                if (filterObject == null)
+                                    continue;
+                            }
+
+                            _filters.AddValue(new(filterObject));
+                        }
+                    }
                 } else if (!value.IsNull) {
                     _filters.AddValue(value);
                 }
@@ -228,8 +244,8 @@ public sealed class DreamObjectImage : DreamObject {
         }
     }
 
-    public DreamObject? GetAttachedLoc(){
-        return this._loc;
+    public DreamObject? GetAttachedLoc() {
+        return _loc;
     }
 
     protected override void HandleDeletion(bool possiblyThreaded) {
