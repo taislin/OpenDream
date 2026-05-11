@@ -46,7 +46,8 @@ public sealed partial class MainMenuState : State {
     }
 
     private void UsernameBoxChanged(LineEdit.LineEditEventArgs args) {
-        _configurationManager.SetCVar(CVars.PlayerName, _mainMenuControl.UserNameBox.Text);
+        _configurationManager.SetCVar(CVars.PlayerName, args.Text);
+        _configurationManager.SaveToFile();
     }
 
     private void RunLevelChanged(object? obj, RunLevelChangedEventArgs args) {

@@ -5,6 +5,7 @@ using Robust.Client.UserInterface;
 using Robust.Client.UserInterface.Controls;
 using Robust.Client.UserInterface.XAML;
 using Robust.Shared.Configuration;
+using Robust.Shared.Utility;
 
 namespace OpenDreamClient.States.Connecting;
 
@@ -16,7 +17,6 @@ public sealed partial class ConnectingControl : Control {
         Panel.PanelOverride = new StyleBoxFlat(Color.Black);
 
         ConnectingLabel.FontOverride = new VectorFont(resCache.GetResource<FontResource>("/Fonts/NotoSans-Regular.ttf"), 24);
-        WIPLabel.FontOverride = new VectorFont(resCache.GetResource<FontResource>("/Fonts/NotoSans-Bold.ttf"), 32);
 
         LayoutContainer.SetAnchorPreset(this, LayoutContainer.LayoutPreset.Wide);
 
@@ -28,11 +28,10 @@ public sealed partial class ConnectingControl : Control {
         LayoutContainer.SetGrowHorizontal(ConnectingLabel, LayoutContainer.GrowDirection.Both);
         LayoutContainer.SetGrowVertical(ConnectingLabel, LayoutContainer.GrowDirection.Both);
 
-        LayoutContainer.SetAnchorPreset(WIP, LayoutContainer.LayoutPreset.VerticalCenterWide);
-        LayoutContainer.SetGrowHorizontal(WIP, LayoutContainer.GrowDirection.Both);
-        LayoutContainer.SetGrowVertical(WIP, LayoutContainer.GrowDirection.Both);
+        var bgSpecifier = new SpriteSpecifier.Rsi(new ResPath("/Textures/Interface/background.rsi"), "background");
+        Background.SetFromSpriteSpecifier(bgSpecifier);
+        Background.DisplayRect.Stretch = TextureRect.StretchMode.KeepAspectCentered;
+        LayoutContainer.SetAnchorPreset(Background, LayoutContainer.LayoutPreset.Wide);
 
-        var logoTexture = resCache.GetResource<TextureResource>("/OpenDream/Logo/logo.png");
-        Logo.Texture = logoTexture;
     }
 }

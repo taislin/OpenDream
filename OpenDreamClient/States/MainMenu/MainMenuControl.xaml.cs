@@ -6,6 +6,7 @@ using Robust.Client.UserInterface.Controls;
 using Robust.Client.UserInterface.XAML;
 using Robust.Shared;
 using Robust.Shared.Configuration;
+using Robust.Shared.Utility;
 
 namespace OpenDreamClient.States.MainMenu;
 
@@ -16,11 +17,14 @@ public sealed partial class MainMenuControl : Control {
     public Button ConnectButton => ConnectButtonProtected;
     public Button QuitButton => QuitButtonProtected;
 
+    private const int ServerOfficial = 0;
+    private const int ServerLocal = 1;
+    private const int ServerCustom = 2;
+
     public MainMenuControl(IResourceCache resCache, IConfigurationManager configMan) {
         RobustXamlLoader.Load(this);
 
         Panel.PanelOverride = new StyleBoxFlat(Color.Black);
-        WIPLabel.FontOverride = new VectorFont(resCache.GetResource<FontResource>("/Fonts/NotoSans-Bold.ttf"), 32);
 
         LayoutContainer.SetAnchorPreset(this, LayoutContainer.LayoutPreset.Wide);
 
@@ -31,13 +35,41 @@ public sealed partial class MainMenuControl : Control {
         var logoTexture = resCache.GetResource<TextureResource>("/OpenDream/Logo/logo.png");
         Logo.Texture = logoTexture;
 
+        var bgSpecifier = new SpriteSpecifier.Rsi(new ResPath("/Textures/Interface/background.rsi"), "background");
+        Background.SetFromSpriteSpecifier(bgSpecifier);
+        Background.DisplayRect.Stretch = TextureRect.StretchMode.KeepAspectCentered;
+        LayoutContainer.SetAnchorPreset(Background, LayoutContainer.LayoutPreset.Wide);
+
         var currentUserName = configMan.GetCVar(CVars.PlayerName);
         UserNameBox.Text = currentUserName;
 
-        AddressBoxProtected.Text = "127.0.0.1:1212";
+        ServerSelection.AddItem("Official server (civ13.com:1212)", ServerOfficial);
+        ServerSelection.AddItem("local server (127.0.0.1:1212)", ServerLocal);
+        ServerSelection.AddItem("Custom", ServerCustom);
+
+        ServerSelection.OnItemSelected += args => {
+            ServerSelection.SelectId(args.Id);
+            UpdateAddressVisibility();
+        };
+
+        ServerSelection.SelectId(ServerOfficial);
+        UpdateAddressVisibility();
+        LayoutContainer.SetAnchorPreset(VersionLabel, LayoutContainer.LayoutPreset.BottomRight);
+        LayoutContainer.SetGrowHorizontal(VersionLabel, LayoutContainer.GrowDirection.Begin);
+        LayoutContainer.SetGrowVertical(VersionLabel, LayoutContainer.GrowDirection.Begin);
 
 #if DEBUG
         DebugWarningLabel.Visible = true;
 #endif
+    }
+
+    private void UpdateAddressVisibility() {
+        var isCustom = ServerSelection.SelectedId == ServerCustom;
+        AddressContainer.Visible = isCustom;
+
+        if (ServerSelection.SelectedId == ServerOfficial)
+            AddressBoxProtected.Text = "civ13.com:1212";
+        else if (ServerSelection.SelectedId == ServerLocal)
+            AddressBoxProtected.Text = "127.0.0.1:1212";
     }
 }
